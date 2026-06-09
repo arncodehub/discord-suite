@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.0.1"
+BOT_VERSION = "1.2.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -164,7 +164,7 @@ def load_shame_data():
 async def set_votekick_broadcast_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     """Set the votekick broadcast channel."""
     if is_command_disabled(interaction.guild_id, "set_votekick_broadcast_channel"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -173,7 +173,7 @@ async def set_votekick_broadcast_channel(interaction: discord.Interaction, chann
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -184,19 +184,15 @@ async def set_votekick_broadcast_channel(interaction: discord.Interaction, chann
     guild_data["votekick_broadcast_channel"] = channel.id
     update_guild_data(interaction.guild_id, guild_data)
 
-    embed = discord.Embed(
-        title="Votekick Broadcast Channel Updated",
-        description=f"Votekick broadcast channel set to {channel.mention}",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+    # Clean text-only message format block
+    await interaction.response.send_message(f"✅ **Votekick Broadcast Channel Updated**\nVotekick broadcast channel set to {channel.mention}")
 
 @bot.tree.command(name="set_active_member_role", description="Set the role for active members (Manager only)")
 @app_commands.describe(role="The role to assign to active members")
 async def set_active_member_role(interaction: discord.Interaction, role: discord.Role):
     """Set the active member role."""
     if is_command_disabled(interaction.guild_id, "set_active_member_role"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -205,7 +201,7 @@ async def set_active_member_role(interaction: discord.Interaction, role: discord
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -216,19 +212,15 @@ async def set_active_member_role(interaction: discord.Interaction, role: discord
     guild_data["active_member_role"] = role.id
     update_guild_data(interaction.guild_id, guild_data)
 
-    embed = discord.Embed(
-        title="Active Member Role Updated",
-        description=f"Active member role set to {role.mention}",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+    # Clean text-only response format block with plaintext role name
+    await interaction.response.send_message(f"✅ **Active Member Role Updated**\nActive member role set to **{role.name}**")
 
 @bot.tree.command(name="set_activity_broadcast_channel", description="Set the channel for activity role updates (Manager only)")
 @app_commands.describe(channel="The channel to log active role changes in")
 async def set_activity_broadcast_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     """Set the activity broadcast channel."""
     if is_command_disabled(interaction.guild_id, "set_activity_broadcast_channel"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -237,7 +229,7 @@ async def set_activity_broadcast_channel(interaction: discord.Interaction, chann
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -248,19 +240,15 @@ async def set_activity_broadcast_channel(interaction: discord.Interaction, chann
     guild_data["activity_broadcast_channel"] = channel.id
     update_guild_data(interaction.guild_id, guild_data)
 
-    embed = discord.Embed(
-        title="Activity Broadcast Channel Updated",
-        description=f"Activity broadcast channel set to {channel.mention}",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+    # Clean text-only message format block
+    await interaction.response.send_message(f"✅ **Activity Broadcast Channel Updated**\nActivity broadcast channel set to {channel.mention}")
 
 @bot.tree.command(name="set_activity_window", description="Set the inactivity threshold in days (Manager only)")
 @app_commands.describe(days="Number of days of silence before a member becomes inactive")
 async def set_activity_window(interaction: discord.Interaction, days: int):
     """Set the activity window."""
     if is_command_disabled(interaction.guild_id, "set_activity_window"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -269,7 +257,7 @@ async def set_activity_window(interaction: discord.Interaction, days: int):
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     if days <= 0:
@@ -284,12 +272,8 @@ async def set_activity_window(interaction: discord.Interaction, days: int):
     guild_data["activity_window_days"] = days
     update_guild_data(interaction.guild_id, guild_data)
 
-    embed = discord.Embed(
-        title="Activity Window Updated",
-        description=f"Activity window set to `{days}` days.",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+    # Format plain text interaction response block
+    await interaction.response.send_message(f"✅ **Activity Window Updated**\nActivity window set to `{days}` days.")
     
 
 def save_shame_data(data):
@@ -890,7 +874,7 @@ async def on_message(message: discord.Message):
                     broadcast_channel_id = guild_config.get("activity_broadcast_channel")
                     broadcast_channel = message.guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
                     if broadcast_channel:
-                        await broadcast_channel.send(f"🎉 **{message.author.name}** has been assigned the **{role.name}** role due to recent message activity!")
+                        await broadcast_channel.send(f"🎉 **{message.author.name}** has been assigned the **{role.name}** role due to recent message activity!", silent=True)
                 except Exception:
                     pass
 
@@ -940,7 +924,7 @@ async def on_ready():
 async def info(interaction: discord.Interaction):
     """Get bot info."""
     if is_command_disabled(interaction.guild_id, "info"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
     
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -1017,7 +1001,7 @@ async def set_manager_role(interaction: discord.Interaction, role: discord.Role)
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=False)
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
     
     guild_data = get_guild_data(interaction.guild_id)
@@ -1038,7 +1022,7 @@ async def reset_manager_role(interaction: discord.Interaction):
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=False)
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
     
     guild_data = get_guild_data(interaction.guild_id)
@@ -1060,7 +1044,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
     if is_command_disabled(interaction.guild_id, "shame"):
         await interaction.response.send_message(
             "❌ This command is disabled in this server.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1077,7 +1061,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
     if not is_manager(interaction):
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1090,7 +1074,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
     if guild_data.get("expiry_days") is None:
         await interaction.response.send_message(
             "❌ Shame entry expiry time must be set before adding entries. Use `/set_expiry_timer` to configure it.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1098,7 +1082,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
     if guild_data.get("shame_channel") is None:
         await interaction.response.send_message(
             "❌ Shame channel must be set before adding entries. Use `/set_shame_channel` to configure it.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1112,7 +1096,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
         except ValueError:
             await interaction.response.send_message(
                 "❌ Invalid date format. Please use YYYY-MM-DD (e.g., 2026-05-10)",
-                ephemeral=False
+                ephemeral=True
             )
             return
     else:
@@ -1127,18 +1111,18 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
     if datetime.now() > expiry_date:
         await interaction.response.send_message(
             f"❌ Cannot add shame entry for {date or 'today'} - it has already expired (expiry window is {expiry_days} days).",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
-    # Create shame entry
+    # Create shame entry - storage records keep user.name style usernames
     entry_id = len(guild_data["entries"]) + 1
     entry = {
         "user_id": user.id,
-        "username": str(user),
+        "username": user.name,
         "reason": reason,
         "date": entry_date_iso,
-        "added_by": str(interaction.user)
+        "added_by": interaction.user.name
     }
     
     guild_data["entries"][str(entry_id)] = entry
@@ -1149,30 +1133,26 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
-    embed = discord.Embed(
-        title="Added to Hall of Shame",
-        description=f"{user.mention} has been added to the hall of shame",
-        color=discord.Color.red()
-    )
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.add_field(name="Date", value=entry_date_iso.split('T')[0], inline=False)
-    embed.add_field(name="Entry ID", value=str(entry_id), inline=False)
-    embed.set_footer(text=f"Added by {interaction.user}")
+    # Format plain text interaction response block
+    response_lines = [
+        f"🚨 **{user.name}** has been added to the hall of shame",
+        f"**Reason:** {reason}",
+        f"**Date:** {entry_date_iso.split('T')[0]}",
+        f"**Entry ID:** {entry_id}",
+        f"*Added by {interaction.user.name}*"
+    ]
+    await interaction.response.send_message("\n".join(response_lines))
     
-    await interaction.response.send_message(embed=embed)
-    
-    # Send to shame channel if set
+    # Send plain text broadcast alert to the shame channel if configured
     shame_channel_id = guild_data.get("shame_channel")
     if shame_channel_id:
         shame_channel = interaction.guild.get_channel(shame_channel_id)
         if shame_channel:
-            shame_embed = discord.Embed(
-                title="Hall O' Shame",
-                description=f"{user.mention} has been added to the hall of shame, for: {reason}.",
-                color=discord.Color.red()
-            )
-            shame_embed.set_thumbnail(url=user.display_avatar.url)
-            await shame_channel.send(embed=shame_embed)
+            broadcast_text = f"🚨 **Hall O' Shame**\n**{user.name}** has been added to the hall of shame, for: {reason}."
+            try:
+                await shame_channel.send(broadcast_text, silent=True)
+            except discord.Forbidden:
+                pass
 
 
 @bot.tree.command(name="unshame", description="Remove a user from the hall of shame (Manager only)")
@@ -1183,7 +1163,7 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     if is_command_disabled(interaction.guild_id, "unshame"):
         await interaction.response.send_message(
             "❌ This command is disabled in this server.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1200,7 +1180,7 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     if not is_manager(interaction):
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1210,7 +1190,7 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     if entry_id_str not in guild_data["entries"]:
         await interaction.response.send_message(
             f"❌ Entry ID {entry_id} not found.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1223,18 +1203,19 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
-    embed = discord.Embed(
-        title="Removed from Hall of Shame",
-        description=f"{entry['username']} has been removed from the hall of shame",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="Original Reason", value=entry["reason"], inline=False)
-    if reason:
-        embed.add_field(name="Removal Reason", value=reason, inline=False)
-    embed.add_field(name="Entry ID", value=entry_id_str, inline=False)
-    embed.set_footer(text=f"Removed by {interaction.user}")
+    # Build a plain-text response matching the clean markdown layout
+    response_lines = [
+        f"✅ **{entry['username']}** has been removed from the hall of shame",
+        f"**Original Reason:** {entry['reason']}"
+    ]
     
-    await interaction.response.send_message(embed=embed)
+    if reason:
+        response_lines.append(f"**Removal Reason:** {reason}")
+        
+    response_lines.append(f"**Entry ID:** {entry_id_str}")
+    response_lines.append(f"*Removed by {interaction.user.name}*")
+    
+    await interaction.response.send_message("\n".join(response_lines))
 
 
 @bot.tree.command(name="list_my_shame", description="List your hall of shame entries")
@@ -1244,7 +1225,7 @@ async def list_my_shame(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "list_my_shame"):
         await interaction.response.send_message(
             "❌ This command is disabled in this server.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1275,19 +1256,14 @@ async def list_my_shame(interaction: discord.Interaction):
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
     if not user_entries:
-        embed = discord.Embed(
-            title="Your Hall of Shame",
-            description="You have no entries in the hall of shame!",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message("✅ **Your Hall of Shame**\nYou have no entries in the hall of shame!")
         return
     
-    embed = discord.Embed(
-        title="Your Hall of Shame",
-        description=f"**Shame Count**: {len(user_entries)}",
-        color=discord.Color.greyple()
-    )
+    # Start building the text-only response block
+    response_lines = [
+        "**Your Hall of Shame**",
+        f"**Shame Count**: {len(user_entries)}\n"
+    ]
     
     expiry_days = guild_data.get("expiry_days", 30)
     
@@ -1299,10 +1275,15 @@ async def list_my_shame(interaction: discord.Interaction):
         entry_timestamp = int(entry_date.timestamp())
         expiry_timestamp = int(expiry_date.timestamp())
         
-        field_value = f"<t:{entry_timestamp}:d> - Expires <t:{expiry_timestamp}:R>\nReason: {entry['reason']}"
-        embed.add_field(name=f"Entry {idx}", value=field_value, inline=False)
+        response_lines.append(f"**Entry {idx}:**")
+        response_lines.append(f"└ <t:{entry_timestamp}:d> - Expires <t:{expiry_timestamp}:R>")
+        response_lines.append(f"  *Reason:* {entry['reason']}\n")
     
-    await interaction.response.send_message(embed=embed)
+    # Join everything up safely into a standard plain text message
+    final_response = "\n".join(response_lines)
+    
+    # Slice to 1995 characters to safely prevent breaching Discord's 2000 character limits
+    await interaction.response.send_message(final_response[:1995])
 
 
 @bot.tree.command(name="list_all_shame", description="List all hall of shame entries")
@@ -1312,7 +1293,7 @@ async def list_all_shame(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "list_all_shame"):
         await interaction.response.send_message(
             "❌ This command is disabled in this server.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1337,12 +1318,7 @@ async def list_all_shame(interaction: discord.Interaction):
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
     if not guild_data["entries"]:
-        embed = discord.Embed(
-            title="Hall of Shame",
-            description="The hall of shame is empty!",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message("✅ **Hall of Shame**\nThe hall of shame is empty!")
         return
     
     # Group by user
@@ -1354,11 +1330,7 @@ async def list_all_shame(interaction: discord.Interaction):
         user_shame_count[user_id]["count"] += 1
         user_shame_count[user_id]["entries"].append((entry_id, entry))
     
-    embed = discord.Embed(
-        title="Shame Counts",
-        color=discord.Color.greyple()
-    )
-    
+    response_lines = ["**Hall of Shame Counts**\n"]
     expiry_days = guild_data.get("expiry_days", 30)
     
     # Sort by count (descending), then by most recent entry (descending)
@@ -1373,31 +1345,37 @@ async def list_all_shame(interaction: discord.Interaction):
         return (-count, -most_recent.timestamp())
     
     for user_id, data in sorted(user_shame_count.items(), key=sort_key):
-        # Get the member from the guild
+        # Get the member from the guild to get their plaintext name
         member = interaction.guild.get_member(user_id)
         if member:
-            user_mention = member.mention
+            user_display = member.name
         else:
-            user_mention = f"<@{user_id}>"
+            user_display = f"User {user_id}"
         
         count = data["count"]
         
-        # Build field value with entries
-        field_value = f"{user_mention} - {count}\n"
+        # Format the user header line using plaintext format rules
+        response_lines.append(f"**{user_display}** - {count} entries:")
+        
         for entry_id, entry in data["entries"]:
             entry_date = datetime.fromisoformat(entry["date"])
             expiry_date = entry_date + timedelta(days=expiry_days)
             
-            # Convert to Unix timestamps
+            # Convert to Unix timestamps (keeps Discord's time formatting engine alive without mentioning users)
             entry_timestamp = int(entry_date.timestamp())
             expiry_timestamp = int(expiry_date.timestamp())
             
             reason = entry.get("reason", "No reason provided")
-            field_value += f"<t:{entry_timestamp}:d> (expires <t:{expiry_timestamp}:R>) - {reason}\n"
+            response_lines.append(f"└ <t:{entry_timestamp}:d> (expires <t:{expiry_timestamp}:R>) - {reason}")
+            
+        # Add a spacing gap between users
+        response_lines.append("")
         
-        embed.add_field(name="\u200b", value=field_value, inline=False)
+    # Join everything up safely into a standard text message
+    final_response = "\n".join(response_lines)
     
-    await interaction.response.send_message(embed=embed)
+    # Slice to 1995 characters just in case it overflows Discord's 2000 character limit
+    await interaction.response.send_message(final_response[:1995])
 
 
 @bot.tree.command(name="cooldown", description="Set command cooldown for the server (Manager only)")
@@ -1417,14 +1395,14 @@ async def set_cooldown_cmd(interaction: discord.Interaction, seconds: int):
     if not is_manager(interaction):
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
     if seconds < 0 or seconds > 30:
         await interaction.response.send_message(
             "❌ Cooldown must be between 0 and 30 seconds.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1456,7 +1434,7 @@ async def set_shame_channel(interaction: discord.Interaction, channel: discord.T
     if not is_manager(interaction):
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1490,14 +1468,14 @@ async def set_expiry_timer(interaction: discord.Interaction, days: int):
     if not is_manager(interaction):
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
     if days < 1:
         await interaction.response.send_message(
             "❌ Expiry duration must be at least 1 day.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1531,14 +1509,14 @@ async def set_votekick_ban_duration(interaction: discord.Interaction, days: int)
     if not is_manager(interaction):
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
     if days < 0 or days > 7:
         await interaction.response.send_message(
             "❌ Ban duration must be between 0 (kick only) and 7 days (ban for a week).",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1630,8 +1608,6 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     else:
         await interaction.channel.send(f"🟠 **{interaction.user.name}** voted for **{user.name}** ({vote_count}/{critical_amount}).", silent=True)
     
-    await interaction.channel.send(embed=embed, silent=True)
-    
     # Check if user should be kicked
     if vote_count >= critical_amount:
         guild_data = get_guild_data(interaction.guild_id)
@@ -1722,7 +1698,7 @@ async def disable_cmd(interaction: discord.Interaction, command: str):
     if not is_moderator(interaction):
         await interaction.response.send_message(
             "❌ You need Manage Server permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1730,7 +1706,7 @@ async def disable_cmd(interaction: discord.Interaction, command: str):
     if not is_valid_command(command):
         await interaction.response.send_message(
             f"❌ The command `{command}` does not exist.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1738,7 +1714,7 @@ async def disable_cmd(interaction: discord.Interaction, command: str):
     if command.lower() in ["enable", "disable"]:
         await interaction.response.send_message(
             "❌ You cannot disable the enable or disable commands.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1746,7 +1722,7 @@ async def disable_cmd(interaction: discord.Interaction, command: str):
     if is_command_disabled(interaction.guild_id, command.lower()):
         await interaction.response.send_message(
             f"❌ The command `{command}` is already disabled in this server.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1780,7 +1756,7 @@ async def enable_cmd(interaction: discord.Interaction, command: str):
     if not is_moderator(interaction):
         await interaction.response.send_message(
             "❌ You need Manage Server permission to use this command.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1788,7 +1764,7 @@ async def enable_cmd(interaction: discord.Interaction, command: str):
     if not is_valid_command(command):
         await interaction.response.send_message(
             f"❌ The command `{command}` does not exist.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1796,7 +1772,7 @@ async def enable_cmd(interaction: discord.Interaction, command: str):
     if not is_command_disabled(interaction.guild_id, command.lower()):
         await interaction.response.send_message(
             f"❌ The command `{command}` is already enabled in this server.",
-            ephemeral=False
+            ephemeral=True
         )
         return
     
@@ -1819,7 +1795,7 @@ MARK_TYPE_LABELS = {
 
 
 async def log_marking_action(guild: discord.Guild, guild_data: dict, action: str, mark_type: str, message: discord.Message, actor: discord.Member):
-    """Send a log embed to the message log channel if configured."""
+    """Send a plain text log message to the message log channel if configured."""
     log_channel_id = guild_data.get("message_log_channel")
     if not log_channel_id:
         return
@@ -1827,17 +1803,20 @@ async def log_marking_action(guild: discord.Guild, guild_data: dict, action: str
     if not log_channel:
         return
 
-    emoji, label, color = MARK_TYPE_LABELS.get(mark_type, ("🏷️", mark_type.capitalize(), discord.Color.blurple()))
-    title = f"{emoji} Message {action.capitalize()} as {label}"
-    embed = discord.Embed(title=title, color=color, timestamp=datetime.now())
-    embed.add_field(name="Author", value=message.author.mention, inline=True)
-    embed.add_field(name="Channel", value=message.channel.mention, inline=True)
-    embed.add_field(name=action.capitalize() + " by", value=actor.mention, inline=True)
-    embed.add_field(name="Message", value=message.content[:1000] if message.content else "[No text content]", inline=False)
-    embed.add_field(name="Jump", value=f"[Go to message]({message.jump_url})", inline=False)
-    embed.set_footer(text=f"Message ID: {message.id}")
+    emoji, label, _ = MARK_TYPE_LABELS.get(mark_type, ("🏷️", mark_type.capitalize(), None))
+    
+    log_text = (
+        f"{emoji} **Message {action.capitalize()} as {label}**\n"
+        f"**Author:** {message.author.name}\n"
+        f"**Channel:** {message.channel.mention}\n"
+        f"**{action.capitalize()} by:** {actor.name}\n"
+        f"**Message:** {message.content[:1000] if message.content else '[No text content]'}\n"
+        f"**Jump:** [Go to message]({message.jump_url})\n"
+        f"**Message ID:** `{message.id}`"
+    )
+    
     try:
-        await log_channel.send(embed=embed)
+        await log_channel.send(log_text, silent=True)
     except discord.Forbidden:
         pass
 
@@ -2114,28 +2093,38 @@ async def message_info(interaction: discord.Interaction, message_id: str):
         return
 
     entry = markings[msg_key]
-    embed = discord.Embed(
-        title="Message Markings",
-        color=discord.Color.blurple()
-    )
-    embed.set_footer(text=f"Message ID: {message_id_int}")
 
-    channel = interaction.guild.get_channel(entry["channel_id"])
+    # Resolve author display name using plaintext
     author = interaction.guild.get_member(entry["author_id"])
-    embed.add_field(name="Author", value=author.mention if author else f"<@{entry['author_id']}>", inline=True)
-    embed.add_field(name="Channel", value=channel.mention if channel else f"<#{entry['channel_id']}>", inline=True)
+    author_str = author.name if author else f"User {entry['author_id']}"
 
-    marks_text = ""
+    # Resolve channel clickable reference (channels remain clickable as #channel-name)
+    channel = interaction.guild.get_channel(entry["channel_id"])
+    channel_str = channel.mention if channel else f"<#{entry['channel_id']}>"
+
+    # Start building the plain text response block
+    response_lines = [
+        "ℹ️ **Message Markings**",
+        f"**Author:** {author_str}",
+        f"**Channel:** {channel_str}\n",
+        "**Marks:**"
+    ]
+
     for mark in entry["marks"]:
         emoji, label, _ = MARK_TYPE_LABELS.get(mark["type"], ("🏷️", mark["type"].capitalize(), None))
         marked_by = interaction.guild.get_member(mark["marked_by"])
         marked_at = datetime.fromisoformat(mark["marked_at"])
-        marked_by_str = marked_by.mention if marked_by else f'<@{mark["marked_by"]}>'
-        marks_text += f"{emoji} **{label}** — by {marked_by_str} <t:{int(marked_at.timestamp())}:R>\n"
+        
+        # Convert user to plaintext name
+        marked_by_str = marked_by.name if marked_by else f'User {mark["marked_by"]}'
+        
+        response_lines.append(f"└ {emoji} **{label}** — by {marked_by_str} <t:{int(marked_at.timestamp())}:R>")
 
-    embed.add_field(name="Marks", value=marks_text, inline=False)
+    response_lines.append(f"\n*Message ID: {message_id_int}*")
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    # Safely join and slice to 1995 to prevent overflow errors
+    final_response = "\n".join(response_lines)
+    await interaction.response.send_message(final_response[:1995], ephemeral=True)
 
 
 @bot.tree.command(name="set_message_log_channel", description="Set the channel for message marking logs (Manager only)")
