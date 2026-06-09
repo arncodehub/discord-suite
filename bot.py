@@ -159,6 +159,138 @@ def load_shame_data():
             return {}
     return {}
 
+@bot.tree.command(name="set_votekick_broadcast_channel", description="Set the channel for votekick broadcasts (Manager only)")
+@app_commands.describe(channel="The channel to send votekick notifications to")
+async def set_votekick_broadcast_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    """Set the votekick broadcast channel."""
+    if is_command_disabled(interaction.guild_id, "set_votekick_broadcast_channel"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    guild_data["votekick_broadcast_channel"] = channel.id
+    update_guild_data(interaction.guild_id, guild_data)
+
+    embed = discord.Embed(
+        title="Votekick Broadcast Channel Updated",
+        description=f"Votekick broadcast channel set to {channel.mention}",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="set_active_member_role", description="Set the role for active members (Manager only)")
+@app_commands.describe(role="The role to assign to active members")
+async def set_active_member_role(interaction: discord.Interaction, role: discord.Role):
+    """Set the active member role."""
+    if is_command_disabled(interaction.guild_id, "set_active_member_role"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    guild_data["active_member_role"] = role.id
+    update_guild_data(interaction.guild_id, guild_data)
+
+    embed = discord.Embed(
+        title="Active Member Role Updated",
+        description=f"Active member role set to {role.mention}",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="set_activity_broadcast_channel", description="Set the channel for activity role updates (Manager only)")
+@app_commands.describe(channel="The channel to log active role changes in")
+async def set_activity_broadcast_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    """Set the activity broadcast channel."""
+    if is_command_disabled(interaction.guild_id, "set_activity_broadcast_channel"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    guild_data["activity_broadcast_channel"] = channel.id
+    update_guild_data(interaction.guild_id, guild_data)
+
+    embed = discord.Embed(
+        title="Activity Broadcast Channel Updated",
+        description=f"Activity broadcast channel set to {channel.mention}",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="set_activity_window", description="Set the inactivity threshold in days (Manager only)")
+@app_commands.describe(days="Number of days of silence before a member becomes inactive")
+async def set_activity_window(interaction: discord.Interaction, days: int):
+    """Set the activity window."""
+    if is_command_disabled(interaction.guild_id, "set_activity_window"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        return
+
+    if days <= 0:
+        await interaction.response.send_message("❌ The activity window must be at least 1 day.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    guild_data["activity_window_days"] = days
+    update_guild_data(interaction.guild_id, guild_data)
+
+    embed = discord.Embed(
+        title="Activity Window Updated",
+        description=f"Activity window set to `{days}` days.",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed)
+    
 
 def save_shame_data(data):
     """Save shame data to JSON file atomically to prevent corruption/loss."""
@@ -224,20 +356,12 @@ async def manage_active_roles_loop():
                     if should_have and not has_role:
                         await member.add_roles(role, reason="Active member threshold matched recent message logs.")
                         if broadcast_channel:
-                            embed = discord.Embed(
-                                description=f"🎉 {member.mention} has been assigned the {role.mention} role due to recent message activity!",
-                                color=discord.Color.green()
-                            )
-                            await broadcast_channel.send(embed=embed)
+                            await broadcast_channel.send(f"🎉 **{member.name}** has been assigned the **{role.name}** role due to recent message activity!")
                             
                     elif not should_have and has_role:
                         await member.remove_roles(role, reason="User fell out of specified activity threshold parameters.")
                         if broadcast_channel:
-                            embed = discord.Embed(
-                                description=f"📉 {member.mention} lost the {role.mention} role due to inactivity.",
-                                color=discord.Color.orange()
-                            )
-                            await broadcast_channel.send(embed=embed)
+                            await broadcast_channel.send(f"📉 **{member.name}** lost the **{role.name}** role due to inactivity.")
                 except discord.Forbidden:
                     pass  # Ignore if hierarchy prevents editing a specific user (like the server owner)
                     
@@ -647,11 +771,7 @@ async def check_expired_votes():
                         remaining_votes = len(vote_data[guild_id_str].get(target_id_str, {}))
                         critical_amount = refresh_critical_amount(guild.id)
                         
-                        embed = discord.Embed(
-                            description=f"🕒 {len(expired_voters)} vote(s) for {target_member.mention} have expired. ({remaining_votes}/{critical_amount})",
-                            color=discord.Color.orange()
-                        )
-                        await broadcast_channel.send(embed=embed, silent=True)
+                        await broadcast_channel.send(f"🕒 {len(expired_voters)} vote(s) for **{target_member.name}** have expired. ({remaining_votes}/{critical_amount})", silent=True)
                 
                 # Clean up empty structures
                 if guild_id_str in vote_data and target_id_str in vote_data[guild_id_str]:
@@ -770,11 +890,7 @@ async def on_message(message: discord.Message):
                     broadcast_channel_id = guild_config.get("activity_broadcast_channel")
                     broadcast_channel = message.guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
                     if broadcast_channel:
-                        embed = discord.Embed(
-                            description=f"🎉 {message.author.mention} has been assigned the {role.mention} role due to recent message activity!",
-                            color=discord.Color.green()
-                        )
-                        await broadcast_channel.send(embed=embed)
+                        await broadcast_channel.send(f"🎉 **{message.author.name}** has been assigned the **{role.name}** role due to recent message activity!")
                 except Exception:
                     pass
 
@@ -823,91 +939,88 @@ async def on_ready():
 @bot.tree.command(name="info", description="Get bot information")
 async def info(interaction: discord.Interaction):
     """Get bot info."""
-    # Check if command is disabled
     if is_command_disabled(interaction.guild_id, "info"):
-        await interaction.response.send_message(
-            "❌ This command is disabled in this server.",
-            ephemeral=False
-        )
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
         return
     
-    # Check cooldown FIRST (applies to everyone)
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(
-            f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
     
     guild_data = get_guild_data(interaction.guild_id)
     
-    # Set cooldown
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
+    # Manager Role
     manager_role_id = guild_data.get("manager_role")
+    manager_role = interaction.guild.get_role(manager_role_id) if manager_role_id else None
+    manager_role_text = manager_role.name if manager_role else "None"
     
-    if manager_role_id:
-        manager_role = interaction.guild.get_role(manager_role_id)
-        manager_role_text = manager_role.mention if manager_role else "Unknown Role\n**Ask a moderator to set a new manager role!**"
-    else:
-        manager_role_text = "None\n**Only moderators can manage the bot currently.**\n**Ask a moderator to set a manager role!**"
+    # Disabled Commands
+    disabled_cmds = ", ".join(guild_data.get("disabled_commands", [])) or "None"
     
-    latency = round(bot.latency * 1000)
-    cooldown = guild_data.get("cooldown", 0)
-    expiry_days = guild_data.get("expiry_days")
+    # Shame Stuff
+    expiry_timer = guild_data.get("expiry_days", "Not Set")
+    shame_channel_id = guild_data.get("shame_channel")
+    shame_channel = f"<#{shame_channel_id}>" if shame_channel_id else "Not Set"
+    
+    # Votekick Stuff
     votekick_ban_duration = guild_data.get("votekick_ban_duration", 7)
+    vk_bc_id = guild_data.get("votekick_broadcast_channel")
+    vk_bc = f"<#{vk_bc_id}>" if vk_bc_id else "Not Set"
     
-    embed = discord.Embed(
-        title="Suite Bot Information",
-        color=discord.Color.blue()
+    # Marking Stuff
+    ml_id = guild_data.get("message_log_channel")
+    ml_channel = f"<#{ml_id}>" if ml_id else "Not Set"
+    
+    # Activity Stuff
+    am_role_id = guild_data.get("active_member_role")
+    am_role = interaction.guild.get_role(am_role_id) if am_role_id else None
+    am_role_text = am_role.name if am_role else "Not Set"
+    
+    act_bc_id = guild_data.get("activity_broadcast_channel")
+    act_bc = f"<#{act_bc_id}>" if act_bc_id else "Not Set"
+    
+    act_win = guild_data.get("activity_window_days", 7)
+    
+    response_text = (
+        "**General Stuff**\n"
+        f"Version: {BOT_VERSION}\n"
+        f"Command Cooldown: {cooldown_seconds}s\n"
+        f"Disabled Commands: {disabled_cmds}\n"
+        f"Manager Role: {manager_role_text}\n\n"
+        "**Shame Stuff**\n"
+        f"Shame Entry Expiry Timer: {expiry_timer}\n"
+        f"Shame Broadcast Channel: {shame_channel}\n\n"
+        "**Vote to Kick Stuff**\n"
+        f"Vote to Kick Ban Duration: {votekick_ban_duration}\n"
+        f"Vote to Kick Broadcast Channel: {vk_bc}\n\n"
+        "**Marking Stuff**\n"
+        f"Marking Broadcast Channel: {ml_channel}\n\n"
+        "**Activity Stuff**\n"
+        f"Active Member Role: {am_role_text}\n"
+        f"Activity Broadcast Channel: {act_bc}\n"
+        f"Activity Window: {act_win}"
     )
-    embed.add_field(name="Bot Version", value=BOT_VERSION, inline=False)
-    embed.add_field(name="Manager Role", value=manager_role_text, inline=False)
-    embed.add_field(name="Latency", value=f"{latency}ms", inline=False)
-    embed.add_field(name="Command Cooldown", value=f"{cooldown}s", inline=False)
     
-    if expiry_days is None:
-        embed.add_field(name="Shame Entry Expiry", value="⚠️ Not set (required to add entries)", inline=False)
-    else:
-        embed.add_field(name="Shame Entry Expiry", value=f"{expiry_days} days", inline=False)
-    
-    if votekick_ban_duration == 0:
-        embed.add_field(name="Vote-to-Kick Ban Duration", value="Kick only (no ban)", inline=False)
-    else:
-        embed.add_field(name="Vote-to-Kick Ban Duration", value=f"{votekick_ban_duration} days", inline=False)
-    
-    embed.set_footer(text=f"Guild ID: {interaction.guild_id}")
-    
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(response_text)
 
 
 @bot.tree.command(name="set_manager_role", description="Set the bot manager role (Moderator only)")
 @app_commands.describe(role="The role to set as manager")
 async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
-    """Set manager role."""
-    # Check cooldown FIRST (applies to everyone)
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(
-            f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
-    
-    # Check permissions (Moderator only)
     if not is_moderator(interaction):
-        await interaction.response.send_message(
-            "❌ You need Manage Server permission to use this command.",
-            ephemeral=False
-        )
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=False)
         return
     
     guild_data = get_guild_data(interaction.guild_id)
-    
-    # Set cooldown
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
@@ -915,37 +1028,20 @@ async def set_manager_role(interaction: discord.Interaction, role: discord.Role)
     guild_data["manager_role"] = role.id
     update_guild_data(interaction.guild_id, guild_data)
     
-    embed = discord.Embed(
-        title="Manager Role Updated",
-        description=f"Manager role set to {role.mention}",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(f"✅ Manager role set to **{role.name}**")
 
 
 @bot.tree.command(name="reset_manager_role", description="Reset manager role (Moderator only)")
 async def reset_manager_role(interaction: discord.Interaction):
-    """Reset manager role."""
-    # Check cooldown FIRST (applies to everyone)
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(
-            f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
-    
-    # Check permissions (Moderator only)
     if not is_moderator(interaction):
-        await interaction.response.send_message(
-            "❌ You need Manage Server permission to use this command.",
-            ephemeral=False
-        )
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=False)
         return
     
     guild_data = get_guild_data(interaction.guild_id)
-    
-    # Set cooldown
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
@@ -953,12 +1049,7 @@ async def reset_manager_role(interaction: discord.Interaction):
     guild_data["manager_role"] = None
     update_guild_data(interaction.guild_id, guild_data)
     
-    embed = discord.Embed(
-        title="Manager Role Reset",
-        description="Manager role reset to server owner only",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message("✅ Manager role reset to server owner only")
 
 
 @bot.tree.command(name="shame", description="Add a user to the hall of shame (Manager only)")
@@ -1345,12 +1436,7 @@ async def set_cooldown_cmd(interaction: discord.Interaction, seconds: int):
     if interaction.guild_id in cooldowns:
         cooldowns[interaction.guild_id].clear()
     
-    embed = discord.Embed(
-        title="Cooldown Updated",
-        description=f"Command cooldown set to {seconds} seconds\nAll existing cooldowns have been reset.",
-        color=discord.Color.blue()
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(f"✅ Command cooldown set to {seconds} seconds\nAll existing cooldowns have been reset.")
 
 
 @bot.tree.command(name="set_shame_channel", description="Set the channel for shame announcements (Manager only)")
@@ -1384,12 +1470,7 @@ async def set_shame_channel(interaction: discord.Interaction, channel: discord.T
     guild_data["shame_channel"] = channel.id
     update_guild_data(interaction.guild_id, guild_data)
     
-    embed = discord.Embed(
-        title="Shame Channel Updated",
-        description=f"Shame announcements will be sent to {channel.mention}",
-        color=discord.Color.blue()
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(f"✅ Shame announcements will be sent to {channel.mention}")
 
 
 @bot.tree.command(name="set_expiry_timer", description="Set expiration duration for shame entries (Manager only)")
@@ -1430,12 +1511,7 @@ async def set_expiry_timer(interaction: discord.Interaction, days: int):
     guild_data["expiry_days"] = days
     update_guild_data(interaction.guild_id, guild_data)
     
-    embed = discord.Embed(
-        title="Expiry Timer Updated",
-        description=f"Shame entries will expire after {days} days",
-        color=discord.Color.blue()
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(f"✅ Shame entries will expire after {days} days")
 
 
 @bot.tree.command(name="set_votekick_ban_duration", description="Set ban duration for vote-to-kick (Manager only)")
@@ -1477,19 +1553,9 @@ async def set_votekick_ban_duration(interaction: discord.Interaction, days: int)
     update_guild_data(interaction.guild_id, guild_data)
     
     if days == 0:
-        embed = discord.Embed(
-            title="Vote-to-Kick Updated",
-            description="Vote-to-kick will now only kick users (no ban).",
-            color=discord.Color.blue()
-        )
+        await interaction.response.send_message("✅ Vote-to-kick will now only kick users (no ban).")
     else:
-        embed = discord.Embed(
-            title="Vote-to-Kick Updated",
-            description=f"Vote-to-kick will now ban users for {days} days.",
-            color=discord.Color.blue()
-        )
-    await interaction.response.send_message(embed=embed)
-
+        await interaction.response.send_message(f"✅ Vote-to-kick will now ban users for {days} days.")
 
 @bot.tree.command(name="vote", description="Vote to kick a user")
 @app_commands.describe(user="The user to vote for", anonymous="Whether your vote is anonymous (default: True)")
@@ -1560,18 +1626,9 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     
     # Send public message
     if anonymous:
-        embed = discord.Embed(
-            description=f"Someone voted for {user.mention} ({vote_count}/{critical_amount}).",
-            color=discord.Color.orange()
-        )
-        embed.set_thumbnail(url=user.display_avatar.url)
+        await interaction.channel.send(f"🟠 Someone voted for **{user.name}** ({vote_count}/{critical_amount}).", silent=True)
     else:
-        embed = discord.Embed(
-            description=f"{interaction.user.mention} voted for {user.mention} ({vote_count}/{critical_amount}).",
-            color=discord.Color.orange()
-        )
-        embed.set_author(name=interaction.user.name, icon_url=interaction.user.display_avatar.url)
-        embed.set_thumbnail(url=user.display_avatar.url)
+        await interaction.channel.send(f"🟠 **{interaction.user.name}** voted for **{user.name}** ({vote_count}/{critical_amount}).", silent=True)
     
     await interaction.channel.send(embed=embed, silent=True)
     
@@ -1584,37 +1641,17 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
             if ban_duration > 0:
                 # Ban for the configured duration
                 await user.ban(reason=f"Vote to kick - reached critical amount (ban for {ban_duration} days)", delete_message_days=0)
-                embed = discord.Embed(
-                    title="User Banned",
-                    description=f"{user.mention} has been banned for {ban_duration} days due to reaching the critical vote threshold!",
-                    color=discord.Color.red()
-                )
+                await interaction.channel.send(f"🚨 **{user.name}** has been banned for {ban_duration} days due to reaching the critical vote threshold!", silent=True)
             else:
                 # Just kick
                 await user.kick(reason="Vote to kick - reached critical amount")
-                embed = discord.Embed(
-                    title="User Kicked",
-                    description=f"{user.mention} has been kicked due to reaching the critical vote threshold!",
-                    color=discord.Color.red()
-                )
-            await interaction.channel.send(embed=embed, silent=True)
+                await interaction.channel.send(f"🚨 **{user.name}** has been kicked due to reaching the critical vote threshold!", silent=True)
             
             # RESET: Clear all votes in this guild when someone is kicked/banned
             clear_all_votes_in_guild(interaction.guild_id)
         except discord.Forbidden:
-            if ban_duration > 0:
-                embed = discord.Embed(
-                    title="Ban Failed",
-                    description=f"{user.mention} should have been banned for {ban_duration} days, but I lack permission.",
-                    color=discord.Color.orange()
-                )
-            else:
-                embed = discord.Embed(
-                    title="Kick Failed",
-                    description=f"{user.mention} should have been kicked, but I lack permission.",
-                    color=discord.Color.orange()
-                )
-            await interaction.channel.send(embed=embed, silent=True)
+            action_type = f"banned for {ban_duration} days" if ban_duration > 0 else "kicked"
+            await interaction.channel.send(f"⚠️ **{user.name}** should have been {action_type}, but I lack permission.", silent=True)
 
 
 @bot.tree.command(name="unvote", description="Remove your vote")
@@ -1664,14 +1701,7 @@ async def unvote(interaction: discord.Interaction):
     critical_amount = refresh_critical_amount(interaction.guild_id)
     
     # Send public message
-    embed = discord.Embed(
-        description=f"Someone unvoted {voted_user.mention if voted_user else voted_user_name} ({vote_count}/{critical_amount}).",
-        color=discord.Color.orange()
-    )
-    if voted_user:
-        embed.set_thumbnail(url=voted_user.display_avatar.url)
-    
-    await interaction.channel.send(embed=embed, silent=True)
+    await interaction.channel.send(f"🟠 Someone unvoted **{voted_user_name}** ({vote_count}/{critical_amount}).", silent=True)
 
 
 @bot.tree.command(name="disable", description="Disable a bot command in this server (Moderator only)")
@@ -1729,12 +1759,7 @@ async def disable_cmd(interaction: discord.Interaction, command: str):
     
     disable_command(interaction.guild_id, command.lower())
     
-    embed = discord.Embed(
-        title="Command Disabled",
-        description=f"The `{command}` command has been disabled in this server.",
-        color=discord.Color.orange()
-    )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(f"🟠 The `{command}` command has been disabled in this server.")
 
 
 @bot.tree.command(name="enable", description="Enable a bot command in this server (Moderator only)")
@@ -1784,16 +1809,7 @@ async def enable_cmd(interaction: discord.Interaction, command: str):
     
     enable_command(interaction.guild_id, command.lower())
     
-    embed = discord.Embed(
-        title="Command Enabled",
-        description=f"The `{command}` command has been enabled in this server.",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
-
-
-
-
+    await interaction.response.send_message(f"✅ The `{command}` command has been enabled in this server.")
 
 # --- Message marking helpers ---
 
