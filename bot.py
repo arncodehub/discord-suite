@@ -1983,6 +1983,8 @@ async def apply_mark(interaction: discord.Interaction, message: discord.Message,
         for reaction in reactions_to_add:
             try:
                 await message.add_reaction(reaction)
+            except discord.NotFound:
+                return
             except discord.Forbidden:
                 pass
 
