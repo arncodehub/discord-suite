@@ -1,0 +1,12 @@
+# Environment Files
+.env
+
+# Data Files
+*.json
+
+# Python Artifacts
+__pycache__
+*.pyc
+
+# Temporary Files
+*.tmp
