@@ -215,6 +215,119 @@ async def set_active_member_role(interaction: discord.Interaction, role: discord
     # Clean text-only response format block with plaintext role name
     await interaction.response.send_message(f"✅ **Active Member Role Updated**\nActive member role set to **{role.name}**")
 
+@bot.tree.command(name="autodelete", description="[BETA] Automatically delete messages older than X days in this channel (Manager only)")
+@app_commands.describe(days="Number of days to keep messages. Use 0 to disable autodeletion.")
+async def autodelete(interaction: discord.Interaction, days: int):
+    """Set or disable message autodeletion for the current channel."""
+    # Hardcoded restriction to the specific Beta Channel ID
+    BETA_CHANNEL_ID = 1511879285802012833
+    if interaction.channel_id != BETA_CHANNEL_ID:
+        await interaction.response.send_message(
+            f"❌ This experimental command is currently locked to the BETA testing channel.",
+            ephemeral=True
+        )
+        return
+
+    # Check if command is disabled globally in the server
+    if is_command_disabled(interaction.guild_id, "autodelete"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+
+    # Check command cooldown
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    # Restrict to Managers only
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return
+
+    # Validate the integer parameter
+    if days < 0:
+        await interaction.response.send_message("❌ Days must be a whole number (0, 1, 2, ...).", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    
+    # Initialize the tracking dictionary if it doesn't exist yet
+    if "autodelete_channels" not in guild_data:
+        guild_data["autodelete_channels"] = {}
+
+    channel_key = str(interaction.channel_id)
+
+    if days == 0:
+        # Disable auto-deletion for this channel
+        if channel_key in guild_data["autodelete_channels"]:
+            del guild_data["autodelete_channels"][channel_key]
+        update_guild_data(interaction.guild_id, guild_data)
+        
+        await interaction.response.send_message(
+            "🛑 **Autodelete Disabled**\nAutomatic message deletion has been turned off for this channel.",
+            ephemeral=False
+        )
+    else:
+        # Enable / Update auto-deletion retention window
+        guild_data["autodelete_channels"][channel_key] = days
+        update_guild_data(interaction.guild_id, guild_data)
+        
+        await interaction.response.send_message(
+            f"🗑️ **Autodelete Enabled**\nMessages in this channel older than `{days}` days will now be automatically purged.",
+            ephemeral=False
+        )
+
+    # Set command cooldown if configured
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+@tasks.loop(hours=1.0)
+async def autodelete_sweeper():
+    """Background loop that sweeps channels configured for automatic old message deletion."""
+    await bot.wait_until_ready()
+    
+    # Process each guild the bot is actively connected to
+    for guild in bot.guilds:
+        guild_data = get_guild_data(guild.id)
+        autodelete_config = guild_data.get("autodelete_channels", {})
+        
+        if not autodelete_config:
+            continue
+            
+        for channel_id_str, days in list(autodelete_config.items()):
+            channel_id = int(channel_id_str)
+            channel = guild.get_channel(channel_id)
+            
+            # If the channel was deleted or is inaccessible, skip it
+            if not channel or not isinstance(channel, discord.TextChannel):
+                continue
+                
+            # Double check our hardcoded safety boundary for the beta feature
+            if channel_id != 1511879285802012833:
+                continue
+
+            cutoff_date = datetime.now() - timedelta(days=days)
+            
+            try:
+                # bulk_delete handles up to 14 days old messages using single API passes,
+                # while older messages are cleanly evaluated individual deletions.
+                deleted_messages = await channel.purge(
+                    before=cutoff_date, 
+                    bulk=True, 
+                    reason="[BETA] Automated channel autodelete threshold reached."
+                )
+                
+                # Optional: If you want to quietly broadcast details to your log channel, 
+                # you can trigger it here silently using: silent=True
+                
+            except discord.Forbidden:
+                # Bot lacks Manage Messages or Read History permissions in this channel
+                pass
+            except discord.HTTPException:
+                # Catch general API rate-limits or transport issues gracefully
+                pass
+
 @bot.tree.command(name="set_activity_broadcast_channel", description="Set the channel for activity role updates (Manager only)")
 @app_commands.describe(channel="The channel to log active role changes in")
 async def set_activity_broadcast_channel(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -914,6 +1027,9 @@ async def on_ready():
     if not manage_active_roles_loop.is_running():
         manage_active_roles_loop.start()
 
+    if not autodelete_sweeper.is_running():
+        autodelete_sweeper.start()
+        
     # KICK OFF NON-BLOCKING HISTORICAL RECONCILIATION TASKS HERE
     asyncio.create_task(scan_guild_history_async())
         
