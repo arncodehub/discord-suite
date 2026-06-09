@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.0.0"
+BOT_VERSION = "1.0.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -604,72 +604,69 @@ def refresh_critical_amount(guild_id: int) -> int:
     return critical_amount
 
 
+@tasks.loop(seconds=30)
 async def check_expired_votes():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            current_time = datetime.now()
-            one_day_ago = current_time - timedelta(hours=24)
-            
-            # We must use list() because we will be modifying the dictionary during iteration
-            for guild_id_str, targets in list(vote_data.items()):
-                guild = bot.get_guild(int(guild_id_str))
-                if not guild:
-                    continue
+    """Background task to regularly purge old, expired vote entries."""
+    try:
+        current_time = datetime.now()
+        one_day_ago = current_time - timedelta(hours=24)
+        
+        # We must use list() because we will be modifying the dictionary during iteration
+        for guild_id_str, targets in list(vote_data.items()):
+            guild = bot.get_guild(int(guild_id_str))
+            if not guild:
+                continue
+                
+            for target_id_str, voters in list(targets.items()):
+                expired_voters = []
+                
+                for voter_id_str, timestamp_str in list(voters.items()):
+                    vote_time = datetime.fromisoformat(timestamp_str)
+                    if vote_time < one_day_ago:
+                        expired_voters.append(voter_id_str)
+                
+                # If we have expired votes, handle them
+                if expired_voters:
+                    for voter_id in expired_voters:
+                        del vote_data[guild_id_str][target_id_str][voter_id]
                     
-                for target_id_str, voters in list(targets.items()):
-                    expired_voters = []
+                    save_vote_data()
                     
-                    for voter_id_str, timestamp_str in list(voters.items()):
-                        vote_time = datetime.fromisoformat(timestamp_str)
-                        if vote_time < one_day_ago:
-                            expired_voters.append(voter_id_str)
+                    # Get user objects for the broadcast message
+                    target_member = guild.get_member(int(target_id_str)) or await bot.fetch_user(int(target_id_str))
                     
-                    # If we have expired votes, handle them
-                    if expired_voters:
-                        for voter_id in expired_voters:
-                            del vote_data[guild_id_str][target_id_str][voter_id]
+                    # Find a channel to broadcast the expiration notice
+                    broadcast_channel = guild.system_channel
+                    if not broadcast_channel:
+                        for channel in guild.text_channels:
+                            if channel.permissions_for(guild.me).send_messages:
+                                broadcast_channel = channel
+                                break
+                    
+                    if broadcast_channel and target_member:
+                        remaining_votes = len(vote_data[guild_id_str].get(target_id_str, {}))
+                        critical_amount = refresh_critical_amount(guild.id)
                         
-                        save_vote_data()
+                        embed = discord.Embed(
+                            description=f"🕒 {len(expired_voters)} vote(s) for {target_member.mention} have expired. ({remaining_votes}/{critical_amount})",
+                            color=discord.Color.orange()
+                        )
+                        await broadcast_channel.send(embed=embed, silent=True)
+                
+                # Clean up empty structures
+                if guild_id_str in vote_data and target_id_str in vote_data[guild_id_str]:
+                    if not vote_data[guild_id_str][target_id_str]:
+                        del vote_data[guild_id_str][target_id_str]
                         
-                        # Get user objects for the broadcast message
-                        target_member = guild.get_member(int(target_id_str)) or await bot.fetch_user(int(target_id_str))
-                        
-                        # Find a channel to broadcast the expiration notice
-                        # Prioritizes system_channel, falls back to first text channel it can type in
-                        broadcast_channel = guild.system_channel
-                        if not broadcast_channel:
-                            for channel in guild.text_channels:
-                                if channel.permissions_for(guild.me).send_messages:
-                                    broadcast_channel = channel
-                                    break
-                        
-                        if broadcast_channel and target_member:
-                            remaining_votes = len(vote_data[guild_id_str].get(target_id_str, {}))
-                            critical_amount = refresh_critical_amount(guild.id)
-                            
-                            embed = discord.Embed(
-                                description=f"🕒 {len(expired_voters)} vote(s) for {target_member.mention} have expired. ({remaining_votes}/{critical_amount})",
-                                color=discord.Color.orange()
-                            )
-                            await broadcast_channel.send(embed=embed, silent=True)
-                    
-                    # Clean up empty structures
-                    if guild_id_str in vote_data and target_id_str in vote_data[guild_id_str]:
-                        if not vote_data[guild_id_str][target_id_str]:
-                            del vote_data[guild_id_str][target_id_str]
-                            
-                if guild_id_str in vote_data and not vote_data[guild_id_str]:
-                    del vote_data[guild_id_str]
-                    
-            save_vote_data()
-            
-        except Exception as e:
-            print(f"Error in check_expired_votes background loop: {e}")
-            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
-            
-        await asyncio.sleep(30)  # Keeps your original 30-second interval
+            if guild_id_str in vote_data and not vote_data[guild_id_str]:
+                del vote_data[guild_id_str]
+                
+        save_vote_data()
+        
+    except Exception as e:
+        print(f"Error in check_expired_votes background loop: {e}")
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
 
 def check_cooldown(guild_id, user_id):
