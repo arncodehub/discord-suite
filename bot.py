@@ -1524,36 +1524,84 @@ async def activity_config_set(interaction: discord.Interaction, role: discord.Ro
     if is_command_disabled(interaction.guild_id, "activity_config_set"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
+    
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
+        
     if not is_manager(interaction):
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
+        
     if role is None and channel is None and window_days is None:
         await interaction.response.send_message("⚠️ Provide a `role`, `channel`, or `window_days` to update.", ephemeral=True)
         return
+        
     if window_days is not None and window_days <= 0:
         await interaction.response.send_message("❌ Activity window must be at least 1 day.", ephemeral=True)
         return
 
+    # Fetch current configuration FIRST to compare incoming values
     guild_data = get_guild_data(interaction.guild_id)
+    current_role_id = guild_data.get("active_member_role")
+
+    # ==========================================
+    # SECURITY LOCK: Privilege Escalation Checks
+    # Only run if a role is provided AND it is DIFFERENT from the currently set role
+    # ==========================================
+    if role is not None and role.id != current_role_id:
+        # 1. Does the invoking user have the Manage Roles permission?
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ **Security Lock:** You must natively possess the 'Manage Roles' permission to configure a new active role.", ephemeral=True)
+            return
+            
+        # 2. Does the bot have the Manage Roles permission?
+        if not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ **Security Lock:** I do not have the 'Manage Roles' permission required to assign this role.", ephemeral=True)
+            return
+
+        # 3. Is the user's highest role above the target role? (Bypassed if user is server owner)
+        if interaction.user.id != interaction.guild.owner_id and interaction.user.top_role <= role:
+            await interaction.response.send_message("❌ **Security Lock:** Your highest role must be strictly above the role you are trying to configure.", ephemeral=True)
+            return
+
+        # 4. Is the bot's highest role above the target role?
+        if interaction.guild.me.top_role <= role:
+            await interaction.response.send_message("❌ **Security Lock:** My highest role must be strictly above the role you are trying to configure.", ephemeral=True)
+            return
+
+        # 5. Does the role have ANY server-level permissions?
+        if role.permissions.value != 0:
+            await interaction.response.send_message("❌ **Security Lock:** The target role must have absolutely NO server-level permissions (all switches must be turned off in Server Settings -> Roles).", ephemeral=True)
+            return
+    # ==========================================
+
     changes = []
-    if role is not None:
+    
+    if role is not None and role.id != current_role_id:
         guild_data["active_member_role"] = role.id
         changes.append(f"• Active Member Role set to **{role.name}**")
-    if channel is not None:
+        
+    if channel is not None and channel.id != guild_data.get("activity_broadcast_channel"):
         guild_data["activity_broadcast_channel"] = channel.id
         changes.append(f"• Activity Broadcast Channel set to {channel.mention}")
-    if window_days is not None:
+        
+    if window_days is not None and window_days != guild_data.get("activity_window_days"):
         guild_data["activity_window_days"] = window_days
         changes.append(f"• Activity Window set to `{window_days}` days")
 
+    # If the manager entered the exact same info that is already saved, don't bother hitting the disk
+    if not changes:
+        await interaction.response.send_message("⚠️ No new changes were made; the provided values already match the current configuration.", ephemeral=True)
+        return
+
     update_guild_data(interaction.guild_id, guild_data)
+    
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+        
     await interaction.response.send_message(f"✅ **Activity Configuration Updated**\n" + "\n".join(changes))
 
 @bot.tree.command(name="activity_config_reset", description="Reset activity settings (Manager only)")
