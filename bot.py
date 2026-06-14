@@ -479,6 +479,10 @@ async def check_expired_votes():
             if not guild:
                 continue
                 
+            # Fetch the guild configuration settings to respect custom broadcast targets
+            guild_config = get_guild_data(guild.id)
+            vk_bc_id = guild_config.get("votekick_broadcast_channel")
+            
             for target_id_str, voters in list(targets.items()):
                 expired_voters = []
                 
@@ -501,8 +505,14 @@ async def check_expired_votes():
                     
                     target_member = guild.get_member(int(target_id_str)) or await bot.fetch_user(int(target_id_str))
                     
+                    # Resolve appropriate channel target (Custom Votekick -> System Channel -> Fallback Text Channel)
                     broadcast_channel = None
-                    if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                    if vk_bc_id:
+                        custom_channel = guild.get_channel(vk_bc_id)
+                        if custom_channel and custom_channel.permissions_for(guild.me).send_messages:
+                            broadcast_channel = custom_channel
+                    
+                    if not broadcast_channel and guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
                         broadcast_channel = guild.system_channel
                         
                     if not broadcast_channel:
