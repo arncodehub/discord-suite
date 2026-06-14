@@ -857,7 +857,13 @@ async def check_expired_votes():
                     target_member = guild.get_member(int(target_id_str)) or await bot.fetch_user(int(target_id_str))
                     
                     # Find a channel to broadcast the expiration notice
-                    broadcast_channel = guild.system_channel
+                    broadcast_channel = None
+                    
+                    # Check if the system channel exists AND if the bot has permission to send messages in it
+                    if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                        broadcast_channel = guild.system_channel
+                        
+                    # If the system channel isn't an option, find the first available text channel
                     if not broadcast_channel:
                         for channel in guild.text_channels:
                             if channel.permissions_for(guild.me).send_messages:
