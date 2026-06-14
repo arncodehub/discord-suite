@@ -482,8 +482,14 @@ async def check_expired_votes():
             for target_id_str, voters in list(targets.items()):
                 expired_voters = []
                 
-                for voter_id_str, timestamp_str in list(voters.items()):
-                    vote_time = datetime.fromisoformat(timestamp_str)
+                for voter_id_str, vote_info in list(voters.items()):
+                    # Read the timestamp depending on if it's new schema or legacy schema
+                    if isinstance(vote_info, dict):
+                        ts_str = vote_info.get("timestamp")
+                    else:
+                        ts_str = vote_info # Legacy string format fallback
+                        
+                    vote_time = datetime.fromisoformat(ts_str)
                     if vote_time < one_day_ago:
                         expired_voters.append(voter_id_str)
                 
@@ -1366,7 +1372,11 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     if str(user.id) not in guild_vote_data:
         guild_vote_data[str(user.id)] = {}
     
-    guild_vote_data[str(user.id)][str(interaction.user.id)] = datetime.now().isoformat()
+    # Save both timestamp and exact anonymity selection
+    guild_vote_data[str(user.id)][str(interaction.user.id)] = {
+        "timestamp": datetime.now().isoformat(),
+        "anonymous": anonymous
+    }
     save_vote_data()
     
     vote_count = len(guild_vote_data[str(user.id)])
@@ -1425,6 +1435,71 @@ async def unvote(interaction: discord.Interaction):
     await interaction.followup.send(f"✅ You removed your vote from {voted_user_name}.")
     critical_amount = refresh_critical_amount(interaction.guild_id)
     await interaction.channel.send(f"🟠 Someone unvoted **{voted_user_name}** ({vote_count}/{critical_amount}).", silent=True)
+
+@bot.tree.command(name="votedata", description="View all active kick votes, who has them, and who voted")
+async def votedata(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
+    
+    if is_command_disabled(interaction.guild_id, "votedata"):
+        await interaction.followup.send("❌ This command is disabled in this server.")
+        return
+        
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
+        return
+
+    guild_vote_data = get_vote_data(interaction.guild_id)
+    
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    if not guild_vote_data:
+        await interaction.followup.send("✅ There are currently no active kick votes against anyone in this server.")
+        return
+
+    critical_amount = refresh_critical_amount(interaction.guild_id)
+    response_lines = ["**Current Kick Vote Standings:**\n"]
+
+    for target_id_str, voters_dict in guild_vote_data.items():
+        target_id = int(target_id_str)
+        target_member = interaction.guild.get_member(target_id)
+        target_name = target_member.name if target_member else f"Unknown User ({target_id})"
+        
+        vote_count = len(voters_dict)
+        voter_displays = []
+        anon_count = 0
+        
+        for voter_id_str, vote_info in voters_dict.items():
+            voter_id = int(voter_id_str)
+            
+            # Defensive check: handle old legacy string formats vs new dict format
+            is_anon = True
+            if isinstance(vote_info, dict):
+                is_anon = vote_info.get("anonymous", True)
+            
+            if is_anon:
+                anon_count += 1
+            else:
+                voter_member = interaction.guild.get_member(voter_id)
+                if voter_member:
+                    voter_displays.append(voter_member.name)
+                else:
+                    voter_displays.append(f"Left Server ({voter_id})")
+
+        voters_string = ""
+        if voter_displays or anon_count > 0:
+            combined_voters = list(voter_displays)
+            if anon_count > 0:
+                combined_voters.append(f"Anonymous x{anon_count}" if anon_count > 1 else "Anonymous")
+            voters_string = f", voted by: {', '.join(combined_voters)}"
+            
+        response_lines.append(f"{target_name} - {vote_count}/{critical_amount}{voters_string}")
+
+    final_response = "\n".join(response_lines)
+    await interaction.followup.send(final_response[:1995])
 
 # ==========================================
 # 5. ACTIVITY COMMANDS
