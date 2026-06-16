@@ -525,7 +525,7 @@ async def check_expired_votes():
                         remaining_votes = len(vote_data[guild_id_str].get(target_id_str, {}))
                         critical_amount = refresh_critical_amount(guild.id)
                         
-                        await broadcast_channel.send(f"🕒 {len(expired_voters)} vote(s) for **{target_member.name}** have expired. ({remaining_votes}/{critical_amount})", silent=True)
+                        await broadcast_channel.send(f"🕒 {len(expired_voters)} vote(s) for `{target_member.name}` have expired. ({remaining_votes}/{critical_amount})", silent=True)
                 
                 if guild_id_str in vote_data and target_id_str in vote_data[guild_id_str]:
                     if not vote_data[guild_id_str][target_id_str]:
@@ -635,12 +635,12 @@ async def manage_active_roles_loop():
                     if should_have and not has_role:
                         await member.add_roles(role, reason="Active member threshold matched recent message logs.")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"🎉 **{member.name}** has been assigned the **{role.name}** role due to recent message activity!")
+                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the **{role.name}** role due to recent message activity!")
                             
                     elif not should_have and has_role:
                         await member.remove_roles(role, reason="User fell out of specified activity threshold parameters.")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"📉 **{member.name}** lost the **{role.name}** role due to inactivity.")
+                            await broadcast_channel.send(f"📉 `{member.name}` lost the **{role.name}** role due to inactivity.")
                 except discord.Forbidden:
                     pass
                     
@@ -1253,7 +1253,7 @@ async def list_all_shame(interaction: discord.Interaction):
     
     for user_id, data in sorted(user_shame_count.items(), key=sort_key):
         member = interaction.guild.get_member(user_id)
-        user_display = member.name if member else f"User {user_id}"
+        user_display = f"`{member.name}`" if member else f"User {user_id}"
         count = data["count"]
         response_lines.append(f"**{user_display}** - {count} entries:")
         
@@ -1476,7 +1476,7 @@ async def votedata(interaction: discord.Interaction):
     for target_id_str, voters_dict in guild_vote_data.items():
         target_id = int(target_id_str)
         target_member = interaction.guild.get_member(target_id)
-        target_name = target_member.name if target_member else f"Unknown User ({target_id})"
+        target_name = f"`{target_member.name}`" if target_member else f"Unknown User ({target_id})"
         
         vote_count = len(voters_dict)
         voter_displays = []
@@ -1495,7 +1495,7 @@ async def votedata(interaction: discord.Interaction):
             else:
                 voter_member = interaction.guild.get_member(voter_id)
                 if voter_member:
-                    voter_displays.append(voter_member.name)
+                    voter_displays.append(f"`{voter_member.name}`")
                 else:
                     voter_displays.append(f"Left Server ({voter_id})")
 
