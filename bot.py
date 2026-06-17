@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.3.5"
+BOT_VERSION = "1.3.6"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1112,7 +1112,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
         f"**Reason:** {reason}",
         f"**Date:** {entry_date_iso.split('T')[0]}",
         f"**Entry ID:** {entry_id}",
-        f"*Added by {interaction.user.name}*"
+        f"*Added by `{interaction.user.name}`*"
     ]
     await interaction.response.send_message("\n".join(response_lines))
     
@@ -1162,7 +1162,7 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     if reason:
         response_lines.append(f"**Removal Reason:** {reason}")
     response_lines.append(f"**Entry ID:** {entry_id_str}")
-    response_lines.append(f"*Removed by {interaction.user.name}*")
+    response_lines.append(f"*Removed by `{interaction.user.name}`*")
     
     await interaction.response.send_message("\n".join(response_lines))
 
@@ -1394,9 +1394,9 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     critical_amount = refresh_critical_amount(interaction.guild_id)
     
     if anonymous:
-        await interaction.channel.send(f"🟠 Someone voted for **{user.name}** ({vote_count}/{critical_amount}).", silent=True)
+        await interaction.channel.send(f"🟠 Someone voted for `{user.name}` ({vote_count}/{critical_amount}).", silent=True)
     else:
-        await interaction.channel.send(f"🟠 **{interaction.user.name}** voted for **{user.name}** ({vote_count}/{critical_amount}).", silent=True)
+        await interaction.channel.send(f"🟠 `{interaction.user.name}` voted for `{user.name}` ({vote_count}/{critical_amount}).", silent=True)
     
     if vote_count >= critical_amount:
         guild_data = get_guild_data(interaction.guild_id)
@@ -1444,7 +1444,7 @@ async def unvote(interaction: discord.Interaction):
     vote_count = len(guild_vote_data.get(str(voted_user_id), {}))
     await interaction.followup.send(f"✅ You removed your vote from {voted_user_name}.")
     critical_amount = refresh_critical_amount(interaction.guild_id)
-    await interaction.channel.send(f"🟠 Someone unvoted **{voted_user_name}** ({vote_count}/{critical_amount}).", silent=True)
+    await interaction.channel.send(f"🟠 Someone unvoted `{voted_user_name}` ({vote_count}/{critical_amount}).", silent=True)
 
 @bot.tree.command(name="votedata", description="View all active kick votes, who has them, and who voted")
 async def votedata(interaction: discord.Interaction):
