@@ -635,12 +635,12 @@ async def manage_active_roles_loop():
                     if should_have and not has_role:
                         await member.add_roles(role, reason="Active member threshold matched recent message logs.")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the **{role.name}** role due to recent message activity!")
+                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
                             
                     elif not should_have and has_role:
                         await member.remove_roles(role, reason="User fell out of specified activity threshold parameters.")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"📉 `{member.name}` lost the **{role.name}** role due to inactivity.")
+                            await broadcast_channel.send(f"📉 `{member.name}` lost the `{role.name}` role due to inactivity.", silent=True)
                 except discord.Forbidden:
                     pass
                     
@@ -712,7 +712,7 @@ async def on_message(message: discord.Message):
                     broadcast_channel_id = guild_config.get("activity_broadcast_channel")
                     broadcast_channel = message.guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
                     if broadcast_channel:
-                        await broadcast_channel.send(f"🎉 **{message.author.name}** has been assigned the **{role.name}** role due to recent message activity!", silent=True)
+                        await broadcast_channel.send(f"🎉 `{message.author.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
                 except Exception:
                     pass
 
