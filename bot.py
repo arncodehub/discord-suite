@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.4.0"
+BOT_VERSION = "1.5.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -41,24 +41,21 @@ user_activity = {}
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
 
-# Remote Logging Configuration
-ERROR_GUILD_ID = 1392955205527670936
-ERROR_CHANNEL_ID = 1511879285802012833
-
 async def broadcast_error_log(message_content: str):
-    """Broadcasts traceback details safely to your admin text channel."""
+    """Broadcasts traceback details safely to the bot owner's DMs."""
     try:
         if not bot.is_ready():
             return
-        guild = bot.get_guild(ERROR_GUILD_ID)
-        if guild:
-            channel = guild.get_channel(ERROR_CHANNEL_ID) or await guild.fetch_channel(ERROR_CHANNEL_ID)
-            if channel:
-                for i in range(0, len(message_content), 1900):
-                    chunk = message_content[i:i+1900]
-                    await channel.send(chunk)
+        
+        # Fetch the bot owner directly via ID
+        owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
+        
+        if owner:
+            for i in range(0, len(message_content), 1900):
+                chunk = message_content[i:i+1900]
+                await owner.send(chunk, silent=True)
     except Exception as dev_err:
-        print(f"Failed to transmit error logs to Discord: {dev_err}")
+        print(f"Failed to transmit error logs to Discord owner DM: {dev_err}")
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -86,15 +83,15 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 async def run_discord_channel_backup():
-    """Backup data files straight to the developer channel if 24 hours have passed."""
+    """Backup data files straight to the developer's DM if 24 hours have passed."""
     try:
         data = load_shame_data()
-        g_id_str = str(ERROR_GUILD_ID)
         
-        if g_id_str not in data:
-            data[g_id_str] = {}
+        # We no longer use a guild ID for tracking the backup timer, so we use a system key
+        if "system_metadata" not in data:
+            data["system_metadata"] = {}
         
-        last_backup_str = data[g_id_str].get("last_dev_channel_backup")
+        last_backup_str = data["system_metadata"].get("last_dev_dm_backup")
         now = datetime.now()
         
         if last_backup_str:
@@ -103,14 +100,10 @@ async def run_discord_channel_backup():
                 print("⏱️ Discord Backup Skipped: Last archive was sent less than 24 hours ago.")
                 return
 
-        guild = bot.get_guild(ERROR_GUILD_ID)
-        if not guild:
-            print("❌ Backup Error: Dev guild not found.")
-            return
-            
-        channel = guild.get_channel(ERROR_CHANNEL_ID) or await guild.fetch_channel(ERROR_CHANNEL_ID)
-        if not channel:
-            print("❌ Backup Error: Dev channel not found.")
+        # Fetch the owner to DM the files to
+        owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
+        if not owner:
+            print("❌ Backup Error: Bot owner not found.")
             return
 
         files_to_send = []
@@ -123,17 +116,19 @@ async def run_discord_channel_backup():
             return
 
         date_stamp = now.strftime("%Y-%m-%d %H:%M:%S")
-        await channel.send(
+        await owner.send(
             content=f"📦 **Automated 24-Hour Database Backup**\n📅 Timestamp: `{date_stamp}`\n⚠️ *Keep these files safe for disaster recovery.*",
-            files=files_to_send
+            files=files_to_send,
+            silent=True
         )
-        print("💾 Success: Live JSON files dispatched to dev channel.")
+        print("💾 Success: Live JSON files dispatched to dev DM.")
 
-        data[g_id_str]["last_dev_channel_backup"] = now.isoformat()
+        # Update the timestamp
+        data["system_metadata"]["last_dev_dm_backup"] = now.isoformat()
         save_shame_data(data)
 
     except Exception as e:
-        print(f"Error handling live channel backup: {e}")
+        print(f"Error handling live DM backup: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         await broadcast_error_log(f"⚠️ **Discord Backup Engine Failed:**\n```python\n{tb}\n```")
 
