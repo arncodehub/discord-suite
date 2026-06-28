@@ -60,6 +60,24 @@ async def broadcast_error_log(message_content: str):
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     """Intercepts app command errors globally and reports tracebacks to your channel."""
+    
+    # 1. Ignore silent check failures (like our custom DM blocker below)
+    if isinstance(error, app_commands.CheckFailure):
+        return
+
+    # 2. Catch TransformerErrors (like Member/Role resolution) that happen in DMs BEFORE checks run
+    if interaction.guild is None and interaction.command and interaction.command.name != "info":
+        try:
+            error_msg = "❌ This command can only be used in servers."
+            if interaction.response.is_done():
+                await interaction.followup.send(error_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(error_msg, ephemeral=True)
+        except Exception:
+            pass
+        return
+
+    # 3. Standard error reporting
     tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
     tb_text = "".join(tb_lines)
     
@@ -81,6 +99,14 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(error_msg, ephemeral=True)
     except Exception:
         pass
+
+@bot.tree.interaction_check
+async def global_dm_check(interaction: discord.Interaction) -> bool:
+    """Globally blocks all commands from running in DMs except for /info."""
+    if interaction.guild is None and interaction.command and interaction.command.name != "info":
+        await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
+        return False
+    return True
 
 async def run_discord_channel_backup():
     """Backup data files straight to the developer's DM if 24 hours have passed."""
@@ -712,6 +738,17 @@ async def on_ready():
 # ==========================================
 @bot.tree.command(name="info", description="Get bot information")
 async def info(interaction: discord.Interaction):
+    # --- DM RESPONSE FORMAT ---
+    if interaction.guild is None:
+        response_text = (
+            "**General Stuff**\n"
+            f"Version: {BOT_VERSION}\n\n"
+            "For more detailed information for a specific server, use this same command in that specific server."
+        )
+        await interaction.response.send_message(response_text)
+        return
+
+    # --- STANDARD SERVER FORMAT ---
     if is_command_disabled(interaction.guild_id, "info"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
