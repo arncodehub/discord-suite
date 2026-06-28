@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.5.1"
+BOT_VERSION = "1.5.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -807,6 +807,7 @@ async def info(interaction: discord.Interaction):
     await interaction.response.send_message(response_text)
 
 @bot.tree.command(name="cooldown", description="Set command cooldown for the server (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(seconds="Cooldown in seconds (0-30)")
 async def set_cooldown_cmd(interaction: discord.Interaction, seconds: int):
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -830,6 +831,7 @@ async def set_cooldown_cmd(interaction: discord.Interaction, seconds: int):
     await interaction.response.send_message(f"✅ Command cooldown set to {seconds} seconds\nAll existing cooldowns have been reset.")
 
 @bot.tree.command(name="enable", description="Enable a bot command in this server (Moderator only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(command="The command to enable")
 @app_commands.autocomplete(command=command_autocomplete)
 async def enable_cmd(interaction: discord.Interaction, command: str):
@@ -856,6 +858,7 @@ async def enable_cmd(interaction: discord.Interaction, command: str):
     await interaction.response.send_message(f"✅ The `{command}` command has been enabled in this server.")
 
 @bot.tree.command(name="disable", description="Disable a bot command in this server (Moderator only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(command="The command to disable")
 @app_commands.autocomplete(command=command_autocomplete)
 async def disable_cmd(interaction: discord.Interaction, command: str):
@@ -885,6 +888,7 @@ async def disable_cmd(interaction: discord.Interaction, command: str):
     await interaction.response.send_message(f"🟠 The `{command}` command has been disabled in this server.")
 
 @bot.tree.command(name="set_manager_role", description="Set the bot manager role (Moderator only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(role="The role to set as manager")
 async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -905,6 +909,7 @@ async def set_manager_role(interaction: discord.Interaction, role: discord.Role)
     await interaction.response.send_message(f"✅ Manager role set to **{role.name}**")
 
 @bot.tree.command(name="reset_manager_role", description="Reset manager role (Moderator only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 async def reset_manager_role(interaction: discord.Interaction):
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
@@ -927,6 +932,7 @@ async def reset_manager_role(interaction: discord.Interaction):
 # 3. SHAME COMMANDS
 # ==========================================
 @bot.tree.command(name="shame_config_set", description="Configure server Shame settings (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(
     channel="The text channel where shame broadcasts are targeted",
     expiry_days="The number of days an entry remains visible before expiring"
@@ -965,6 +971,7 @@ async def shame_config_set(interaction: discord.Interaction, channel: discord.Te
     await interaction.response.send_message(f"✅ **Shame Configuration Updated**\n" + "\n".join(changes))
 
 @bot.tree.command(name="shame_config_reset", description="Reset shame configurations to default (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(attribute="The setting to reset")
 @app_commands.choices(attribute=[
     app_commands.Choice(name="Shame Broadcast Channel", value="channel"),
@@ -997,6 +1004,7 @@ async def shame_config_reset(interaction: discord.Interaction, attribute: str):
     await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been reset to default.")
 
 @bot.tree.command(name="shame", description="Add a user to the hall of shame (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(user="The user to add", reason="Reason for shame", date="Optional date (YYYY-MM-DD format)")
 async def shame(interaction: discord.Interaction, user: discord.User, reason: str, date: str = None):
     if is_command_disabled(interaction.guild_id, "shame"):
@@ -1077,6 +1085,7 @@ async def shame(interaction: discord.Interaction, user: discord.User, reason: st
                 pass
 
 @bot.tree.command(name="unshame", description="Remove a user from the hall of shame (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(entry_id="The entry ID to remove", reason="Optional reason for removal")
 async def unshame(interaction: discord.Interaction, entry_id: int, reason: str = None):
     if is_command_disabled(interaction.guild_id, "unshame"):
@@ -1117,6 +1126,7 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     await interaction.response.send_message("\n".join(response_lines))
 
 @bot.tree.command(name="list_my_shame", description="List your hall of shame entries")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 async def list_my_shame(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "list_my_shame"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1163,6 +1173,7 @@ async def list_my_shame(interaction: discord.Interaction):
     await interaction.response.send_message("\n".join(response_lines)[:1995])
 
 @bot.tree.command(name="list_all_shame", description="List all hall of shame entries")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 async def list_all_shame(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "list_all_shame"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1223,6 +1234,7 @@ async def list_all_shame(interaction: discord.Interaction):
 # 4. VOTEKICK COMMANDS
 # ==========================================
 @bot.tree.command(name="votekick_config_set", description="Configure votekick settings (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(
     channel="The channel for votekick broadcasts",
     ban_duration="Ban duration in days (0-7)"
@@ -1261,6 +1273,7 @@ async def votekick_config_set(interaction: discord.Interaction, channel: discord
     await interaction.response.send_message(f"✅ **Votekick Configuration Updated**\n" + "\n".join(changes))
 
 @bot.tree.command(name="votekick_config_reset", description="Reset votekick settings (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(attribute="The setting to reset")
 @app_commands.choices(attribute=[
     app_commands.Choice(name="Broadcast Channel", value="channel"),
@@ -1294,6 +1307,7 @@ async def votekick_config_reset(interaction: discord.Interaction, attribute: str
 
 @bot.tree.command(name="vote", description="Vote to kick a user")
 @app_commands.describe(user="The user to vote for", anonymous="Whether your vote is anonymous (default: True)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 async def vote(interaction: discord.Interaction, user: discord.Member, anonymous: bool = True):
     await interaction.response.defer(ephemeral=True)
     if is_command_disabled(interaction.guild_id, "vote"):
@@ -1366,6 +1380,7 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
             await interaction.channel.send(f"⚠️ **{user.name}** should have been {action_type}, but I lack permission.", silent=True)
 
 @bot.tree.command(name="unvote", description="Remove your vote")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 async def unvote(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     if is_command_disabled(interaction.guild_id, "unvote"):
@@ -1397,6 +1412,7 @@ async def unvote(interaction: discord.Interaction):
     await interaction.channel.send(f"🟠 Someone unvoted `{voted_user_name}` ({vote_count}/{critical_amount}).", silent=True)
 
 @bot.tree.command(name="votedata", description="View all active kick votes, who has them, and who voted")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 async def votedata(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
     
@@ -1465,6 +1481,7 @@ async def votedata(interaction: discord.Interaction):
 # 5. ACTIVITY COMMANDS
 # ==========================================
 @bot.tree.command(name="activity_config_set", description="Configure activity settings (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(
     role="The active member role",
     channel="The activity broadcast channel",
@@ -1555,6 +1572,7 @@ async def activity_config_set(interaction: discord.Interaction, role: discord.Ro
     await interaction.response.send_message(f"✅ **Activity Configuration Updated**\n" + "\n".join(changes))
 
 @bot.tree.command(name="activity_config_reset", description="Reset activity settings (Manager only)")
+@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
 @app_commands.describe(attribute="The setting to reset")
 @app_commands.choices(attribute=[
     app_commands.Choice(name="Active Member Role", value="role"),
