@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.5.2"
+BOT_VERSION = "1.6.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -40,6 +40,28 @@ user_activity = {}
 
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
+
+def get_active_member_count(guild_id: int) -> int:
+    """Calculates how many members meet the 'X messages in Y days' requirement."""
+    guild_data = get_guild_data(guild_id)
+    window_days = guild_data.get("activity_window_days", 7)
+    window_msgs = guild_data.get("activity_window_messages", 1) # Default to 1 for backwards compatibility
+    
+    cutoff = datetime.now() - timedelta(days=window_days)
+    active_count = 0
+    guild_id_str = str(guild_id)
+    
+    if guild_id_str in user_activity:
+        for uid, timestamps in user_activity[guild_id_str].items():
+            # Safely handle old v1.5 data where timestamp was a single string
+            if isinstance(timestamps, str):
+                timestamps = [timestamps]
+                
+            valid_ts = [ts for ts in timestamps if datetime.fromisoformat(ts) > cutoff]
+            if len(valid_ts) >= window_msgs:
+                active_count += 1
+                
+    return active_count
 
 async def broadcast_error_log(message_content: str):
     """Broadcasts traceback details safely to the bot owner's DMs."""
@@ -682,26 +704,41 @@ async def on_guild_join(guild):
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot or not message.guild:
+    # Ignore bots and DMs
+    if message.author.bot or message.guild is None:
         return
         
-    update_user_activity(message.guild.id, message.author.id)
+    guild_id_str = str(message.guild.id)
+    user_id_str = str(message.author.id)
     
-    guild_config = get_guild_data(message.guild.id)
-    role_id = guild_config.get("active_member_role")
-    if role_id:
-        role = message.guild.get_role(role_id)
-        if role and message.guild.me.guild_permissions.manage_roles and message.guild.me.top_role > role:
-            if role not in message.author.roles:
-                try:
-                    await message.author.add_roles(role, reason="Sent message while active role assignment tracking is active.")
-                    broadcast_channel_id = guild_config.get("activity_broadcast_channel")
-                    broadcast_channel = message.guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
-                    if broadcast_channel:
-                        await broadcast_channel.send(f"🎉 `{message.author.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
-                except Exception:
-                    pass
-
+    if guild_id_str not in user_activity:
+        user_activity[guild_id_str] = {}
+        
+    now_str = datetime.now().isoformat()
+    
+    # Migrate old v1.5 data to list format on the fly, then append new message
+    if user_id_str in user_activity[guild_id_str]:
+        if isinstance(user_activity[guild_id_str][user_id_str], str):
+            user_activity[guild_id_str][user_id_str] = [user_activity[guild_id_str][user_id_str]]
+        user_activity[guild_id_str][user_id_str].append(now_str)
+    else:
+        user_activity[guild_id_str][user_id_str] = [now_str]
+        
+    # Prune list to only keep messages within the window timeframe to save memory
+    guild_data = get_guild_data(message.guild.id)
+    window_days = guild_data.get("activity_window_days", 7)
+    cutoff = datetime.now() - timedelta(days=window_days)
+    
+    user_activity[guild_id_str][user_id_str] = [
+        ts for ts in user_activity[guild_id_str][user_id_str] 
+        if datetime.fromisoformat(ts) > cutoff
+    ]
+    
+    # Save the file (assuming you have a save function like this)
+    with open(USER_ACTIVITY_FILE, "w") as f:
+        json.dump(user_activity, f)
+        
+    # Always process commands after on_message
     await bot.process_commands(message)
 
 @bot.event
@@ -763,28 +800,41 @@ async def info(interaction: discord.Interaction):
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
+    # Format Roles with backticks
     manager_role_id = guild_data.get("manager_role")
     manager_role = interaction.guild.get_role(manager_role_id) if manager_role_id else None
-    manager_role_text = manager_role.name if manager_role else "None"
+    manager_role_text = f"`{manager_role.name}`" if manager_role else "None"
+    
+    am_role_id = guild_data.get("active_member_role")
+    am_role = interaction.guild.get_role(am_role_id) if am_role_id else None
+    am_role_text = f"`{am_role.name}`" if am_role else "Not Set"
     
     disabled_cmds = ", ".join(guild_data.get("disabled_commands", [])) or "None"
     
+    # Format Expiry Timer
     expiry_timer = guild_data.get("expiry_days", "Not Set")
+    if expiry_timer != "Not Set":
+        expiry_timer = f"{expiry_timer} days"
+        
     shame_channel_id = guild_data.get("shame_channel")
     shame_channel = f"<#{shame_channel_id}>" if shame_channel_id else "Not Set"
     
+    # Format Vote to Kick
     votekick_ban_duration = guild_data.get("votekick_ban_duration", 7)
     vk_bc_id = guild_data.get("votekick_broadcast_channel")
     vk_bc = f"<#{vk_bc_id}>" if vk_bc_id else "Not Set"
     
-    am_role_id = guild_data.get("active_member_role")
-    am_role = interaction.guild.get_role(am_role_id) if am_role_id else None
-    am_role_text = am_role.name if am_role else "Not Set"
+    # Calculate Critical Amount (adjust math below if you use a specific percentage)
+    active_count = get_active_member_count(interaction.guild_id)
+    # Example math: Critical amount is 10% of active members, minimum of 3. Update to match your actual formula!
+    critical_amount = max(3, int(active_count * 0.10)) 
     
     act_bc_id = guild_data.get("activity_broadcast_channel")
     act_bc = f"<#{act_bc_id}>" if act_bc_id else "Not Set"
     
-    act_win = guild_data.get("activity_window_days", 7)
+    # Format Activity Window
+    act_win_days = guild_data.get("activity_window_days", 7)
+    act_win_msgs = guild_data.get("activity_window_messages", 1)
     
     response_text = (
         "**General Stuff**\n"
@@ -796,12 +846,13 @@ async def info(interaction: discord.Interaction):
         f"Shame Entry Expiry Timer: {expiry_timer}\n"
         f"Shame Broadcast Channel: {shame_channel}\n\n"
         "**Vote to Kick Stuff**\n"
-        f"Vote to Kick Ban Duration: {votekick_ban_duration}\n"
+        f"Critical Amount: {critical_amount}\n"
+        f"Vote to Kick Ban Duration: {votekick_ban_duration} days\n"
         f"Vote to Kick Broadcast Channel: {vk_bc}\n\n"
         "**Activity Stuff**\n"
         f"Active Member Role: {am_role_text}\n"
         f"Activity Broadcast Channel: {act_bc}\n"
-        f"Activity Window: {act_win}"
+        f"Activity Window: {act_win_msgs} messages in the last {act_win_days} days"
     )
     
     await interaction.response.send_message(response_text)
@@ -1481,13 +1532,14 @@ async def votedata(interaction: discord.Interaction):
 # 5. ACTIVITY COMMANDS
 # ==========================================
 @bot.tree.command(name="activity_config_set", description="Configure activity settings (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
+@app_commands.guild_only()
 @app_commands.describe(
     role="The active member role",
     channel="The activity broadcast channel",
-    window_days="Activity window threshold in days"
+    window_days="Activity window threshold in days",
+    window_messages="Number of messages required in the window"
 )
-async def activity_config_set(interaction: discord.Interaction, role: discord.Role = None, channel: discord.TextChannel = None, window_days: int = None):
+async def activity_config_set(interaction: discord.Interaction, role: discord.Role = None, channel: discord.TextChannel = None, window_days: int = None, window_messages: int = None):
     if is_command_disabled(interaction.guild_id, "activity_config_set"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
@@ -1501,12 +1553,16 @@ async def activity_config_set(interaction: discord.Interaction, role: discord.Ro
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
         
-    if role is None and channel is None and window_days is None:
-        await interaction.response.send_message("⚠️ Provide a `role`, `channel`, or `window_days` to update.", ephemeral=True)
+    if role is None and channel is None and window_days is None and window_messages is None:
+        await interaction.response.send_message("⚠️ Provide a `role`, `channel`, `window_days`, or `window_messages` to update.", ephemeral=True)
         return
         
     if window_days is not None and window_days <= 0:
-        await interaction.response.send_message("❌ Activity window must be at least 1 day.", ephemeral=True)
+        await interaction.response.send_message("❌ Activity window days must be at least 1.", ephemeral=True)
+        return
+        
+    if window_messages is not None and window_messages <= 0:
+        await interaction.response.send_message("❌ Required messages must be at least 1.", ephemeral=True)
         return
 
     # Fetch current configuration FIRST to compare incoming values
@@ -1515,32 +1571,22 @@ async def activity_config_set(interaction: discord.Interaction, role: discord.Ro
 
     # ==========================================
     # SECURITY LOCK: Privilege Escalation Checks
-    # Only run if a role is provided AND it is DIFFERENT from the currently set role
     # ==========================================
     if role is not None and role.id != current_role_id:
-        # 1. Does the invoking user have the Manage Roles permission?
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("❌ **Security Lock:** You must natively possess the 'Manage Roles' permission to configure a new active role.", ephemeral=True)
             return
-            
-        # 2. Does the bot have the Manage Roles permission?
         if not interaction.guild.me.guild_permissions.manage_roles:
             await interaction.response.send_message("❌ **Security Lock:** I do not have the 'Manage Roles' permission required to assign this role.", ephemeral=True)
             return
-
-        # 3. Is the user's highest role above the target role? (Bypassed if user is server owner)
         if interaction.user.id != interaction.guild.owner_id and interaction.user.top_role <= role:
             await interaction.response.send_message("❌ **Security Lock:** Your highest role must be strictly above the role you are trying to configure.", ephemeral=True)
             return
-
-        # 4. Is the bot's highest role above the target role?
         if interaction.guild.me.top_role <= role:
             await interaction.response.send_message("❌ **Security Lock:** My highest role must be strictly above the role you are trying to configure.", ephemeral=True)
             return
-
-        # 5. Does the role have ANY server-level permissions?
         if role.permissions.value != 0:
-            await interaction.response.send_message("❌ **Security Lock:** The target role must have absolutely NO server-level permissions (all switches must be turned off in Server Settings -> Roles).", ephemeral=True)
+            await interaction.response.send_message("❌ **Security Lock:** The target role must have absolutely NO server-level permissions.", ephemeral=True)
             return
     # ==========================================
 
@@ -1556,9 +1602,12 @@ async def activity_config_set(interaction: discord.Interaction, role: discord.Ro
         
     if window_days is not None and window_days != guild_data.get("activity_window_days"):
         guild_data["activity_window_days"] = window_days
-        changes.append(f"• Activity Window set to `{window_days}` days")
+        changes.append(f"• Activity Window Days set to `{window_days}`")
+        
+    if window_messages is not None and window_messages != guild_data.get("activity_window_messages"):
+        guild_data["activity_window_messages"] = window_messages
+        changes.append(f"• Activity Window Messages set to `{window_messages}`")
 
-    # If the manager entered the exact same info that is already saved, don't bother hitting the disk
     if not changes:
         await interaction.response.send_message("⚠️ No new changes were made; the provided values already match the current configuration.", ephemeral=True)
         return
@@ -1569,10 +1618,10 @@ async def activity_config_set(interaction: discord.Interaction, role: discord.Ro
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
         
-    await interaction.response.send_message(f"✅ **Activity Configuration Updated**\n" + "\n".join(changes))
+    await interaction.response.send_message(f"✅ **Activity Configuration Updated**\n" + "\n".join(changes), ephemeral=True)
 
 @bot.tree.command(name="activity_config_reset", description="Reset activity settings (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
+@app_commands.guild_only()
 @app_commands.describe(attribute="The setting to reset")
 @app_commands.choices(attribute=[
     app_commands.Choice(name="Active Member Role", value="role"),
@@ -1600,14 +1649,15 @@ async def activity_config_reset(interaction: discord.Interaction, attribute: str
         display = "Activity Broadcast Channel"
     elif attribute == "window":
         guild_data["activity_window_days"] = 7
-        display = "Activity Window (Reset to 7 Days)"
+        guild_data["activity_window_messages"] = 1
+        display = "Activity Window (Reset to 1 message in 7 Days)"
 
     update_guild_data(interaction.guild_id, guild_data)
     cooldown_seconds = guild_data.get("cooldown", 0)
     
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been reset to default.")
+    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been reset to default.", ephemeral=True)
 
 # Run the bot
 if __name__ == "__main__":
