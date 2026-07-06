@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.6.0"
+BOT_VERSION = "1.6.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -41,27 +41,27 @@ user_activity = {}
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
 
-def get_active_member_count(guild_id: int) -> int:
-    """Calculates how many members meet the 'X messages in Y days' requirement."""
-    guild_data = get_guild_data(guild_id)
-    window_days = guild_data.get("activity_window_days", 7)
-    window_msgs = guild_data.get("activity_window_messages", 1) # Default to 1 for backwards compatibility
+# Cached critical amounts per guild: {guild_id: int}
+critical_amounts = {}
+
+def refresh_critical_amount(guild_id: int):
+    """Calculates and updates the cached critical vote threshold for a guild."""
+    guild = bot.get_guild(guild_id)
+    if not guild:
+        return
+    active_count = get_active_users_count(guild)
+    critical_amounts[guild_id] = max(2, int(active_count * 0.10))
+    last_critical_refresh[guild_id] = datetime.now()
+
+def get_critical_amount(guild_id: int) -> int:
+    """Returns the cached critical amount or recalculates if expired (1 hour)."""
+    now = datetime.now()
+    last_refresh = last_critical_refresh.get(guild_id)
     
-    cutoff = datetime.now() - timedelta(days=window_days)
-    active_count = 0
-    guild_id_str = str(guild_id)
-    
-    if guild_id_str in user_activity:
-        for uid, timestamps in user_activity[guild_id_str].items():
-            # Safely handle old v1.5 data where timestamp was a single string
-            if isinstance(timestamps, str):
-                timestamps = [timestamps]
-                
-            valid_ts = [ts for ts in timestamps if datetime.fromisoformat(ts) > cutoff]
-            if len(valid_ts) >= window_msgs:
-                active_count += 1
-                
-    return active_count
+    if guild_id not in critical_amounts or not last_refresh or now - last_refresh > timedelta(hours=1):
+        refresh_critical_amount(guild_id)
+        
+    return critical_amounts.get(guild_id, 2)
 
 async def broadcast_error_log(message_content: str):
     """Broadcasts traceback details safely to the bot owner's DMs."""
@@ -449,15 +449,14 @@ def remove_expired_entries(guild_data):
         
         if current_time > expiry_date:
             entries_to_remove.append(entry_id)
-    
+            
     for entry_id in entries_to_remove:
         del guild_data["entries"][entry_id]
 
 def is_command_disabled(guild_id, command_name):
     """Check if a command is disabled in a guild."""
     guild_data = get_guild_data(guild_id)
-    disabled_commands = guild_data.get("disabled_commands", [])
-    return command_name in disabled_commands
+    return command_name in guild_data.get("disabled_commands", [])
 
 def disable_command(guild_id, command_name):
     """Disable a command in a guild."""
@@ -482,68 +481,71 @@ def get_all_command_names():
     return sorted([cmd.name for cmd in bot.tree.get_commands() if not isinstance(cmd, discord.app_commands.ContextMenu)])
 
 def is_valid_command(command_name: str) -> bool:
-    """Check if a command exists."""
-    return command_name.lower() in get_all_command_names()
+    """Check if a command string matches a real command name registration."""
+    return command_name in get_all_command_names()
 
-async def command_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    """Autocomplete for command names."""
-    all_commands = get_all_command_names()
-    available = [cmd for cmd in all_commands if cmd not in ["enable", "disable"]]
-    filtered = [cmd for cmd in available if cmd.startswith(current.lower())]
-    return [app_commands.Choice(name=cmd, value=cmd) for cmd in filtered[:25]]
+def is_manager(interaction: discord.Interaction) -> bool:
+    """Check if user has the custom manager role or Manage Server permission."""
+    if interaction.user.guild_permissions.manage_guild:
+        return True
+    guild_data = get_guild_data(interaction.guild_id)
+    manager_role_id = guild_data.get("manager_role")
+    if manager_role_id:
+        role = interaction.guild.get_role(manager_role_id)
+        if role in interaction.user.roles:
+            return True
+    return False
 
-def calculate_critical_amount(active_users: int) -> int:
-    """Calculate the critical amount needed to kick someone."""
-    return (active_users // 2) + 1
+def is_moderator(interaction: discord.Interaction) -> bool:
+    """Strictly checks if user has standard Manage Server guild permissions."""
+    return interaction.user.guild_permissions.manage_guild
 
-def refresh_critical_amount(guild_id: int) -> int:
-    """Refresh and return the critical amount for a guild."""
-    guild = bot.get_guild(guild_id)
-    if not guild:
+def set_cooldown(guild_id, user_id, seconds):
+    """Set cooldown for a user in a guild."""
+    if guild_id not in cooldowns:
+        cooldowns[guild_id] = {}
+    cooldowns[guild_id][user_id] = datetime.now() + timedelta(seconds=seconds)
+
+def check_cooldown(guild_id, user_id):
+    """Check if user is on cooldown in guild."""
+    if guild_id not in cooldowns:
         return 0
-    
-    active_users = get_active_users_count(guild)
-    critical_amount = calculate_critical_amount(active_users)
-    last_critical_refresh[guild_id] = datetime.now()
-    return critical_amount
+    if user_id not in cooldowns[guild_id]:
+        return 0
+    remaining = (cooldowns[guild_id][user_id] - datetime.now()).total_seconds()
+    if remaining <= 0:
+        del cooldowns[guild_id][user_id]
+        return 0
+    return remaining
 
-@tasks.loop(seconds=30)
+@tasks.loop(minutes=1)
 async def check_expired_votes():
-    """Background task to regularly purge old, expired vote entries."""
+    """Background task frame loop executing once a minute to sweep old active votekicks."""
     try:
         current_time = datetime.now()
         one_day_ago = current_time - timedelta(hours=24)
         
-        for guild_id_str, targets in list(vote_data.items()):
-            guild = bot.get_guild(int(guild_id_str))
+        for guild_id_str in list(vote_data.keys()):
+            guild_id = int(guild_id_str)
+            guild = bot.get_guild(guild_id)
             if not guild:
                 continue
                 
-            # Fetch the guild configuration settings to respect custom broadcast targets
-            guild_config = get_guild_data(guild.id)
-            vk_bc_id = guild_config.get("votekick_broadcast_channel")
+            guild_data = get_guild_data(guild_id)
+            vk_bc_id = guild_data.get("votekick_broadcast_channel")
+            critical_amount = get_critical_amount(guild_id)
             
-            for target_id_str, voters in list(targets.items()):
+            for target_id_str in list(vote_data[guild_id_str].keys()):
                 expired_voters = []
-                
-                for voter_id_str, vote_info in list(voters.items()):
-                    # Read the timestamp depending on if it's new schema or legacy schema
-                    if isinstance(vote_info, dict):
-                        ts_str = vote_info.get("timestamp")
-                    else:
-                        ts_str = vote_info # Legacy string format fallback
-                        
+                for voter_id_str, ts_str in vote_data[guild_id_str][target_id_str].items():
+                    # Safely support legacy single string timestamp format fallback
                     vote_time = datetime.fromisoformat(ts_str)
                     if vote_time < one_day_ago:
                         expired_voters.append(voter_id_str)
-                
+                        
                 if expired_voters:
                     for voter_id in expired_voters:
                         del vote_data[guild_id_str][target_id_str][voter_id]
-                    
                     save_vote_data()
                     
                     target_member = guild.get_member(int(target_id_str)) or await bot.fetch_user(int(target_id_str))
@@ -554,113 +556,58 @@ async def check_expired_votes():
                         custom_channel = guild.get_channel(vk_bc_id)
                         if custom_channel and custom_channel.permissions_for(guild.me).send_messages:
                             broadcast_channel = custom_channel
-                    
                     if not broadcast_channel and guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
                         broadcast_channel = guild.system_channel
-                        
                     if not broadcast_channel:
                         for channel in guild.text_channels:
                             if channel.permissions_for(guild.me).send_messages:
                                 broadcast_channel = channel
                                 break
-                    
-                    if broadcast_channel and target_member:
-                        remaining_votes = len(vote_data[guild_id_str].get(target_id_str, {}))
-                        critical_amount = refresh_critical_amount(guild.id)
+                                
+                    if broadcast_channel:
+                        remaining_votes = len(vote_data[guild_id_str][target_id_str])
+                        await broadcast_channel.send(f"⏱️ Some votes for `{target_member.name}` have expired. ({remaining_votes}/{critical_amount})", silent=True)
                         
-                        await broadcast_channel.send(f"🕒 {len(expired_voters)} vote(s) for `{target_member.name}` have expired. ({remaining_votes}/{critical_amount})", silent=True)
-                
                 if guild_id_str in vote_data and target_id_str in vote_data[guild_id_str]:
                     if not vote_data[guild_id_str][target_id_str]:
                         del vote_data[guild_id_str][target_id_str]
                         
             if guild_id_str in vote_data and not vote_data[guild_id_str]:
                 del vote_data[guild_id_str]
+                save_vote_data()
                 
-        save_vote_data()
-        
     except Exception as e:
         print(f"Error in check_expired_votes background loop: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
-def check_cooldown(guild_id, user_id):
-    """Check if user is on cooldown in guild."""
-    if guild_id not in cooldowns:
-        return 0
-    if user_id not in cooldowns[guild_id]:
-        return 0
-    
-    remaining = cooldowns[guild_id][user_id] - datetime.now().timestamp()
-    if remaining <= 0:
-        del cooldowns[guild_id][user_id]
-        return 0
-    return remaining
-
-def set_cooldown(guild_id, user_id, cooldown_seconds):
-    """Set cooldown for user in guild."""
-    if guild_id not in cooldowns:
-        cooldowns[guild_id] = {}
-    cooldowns[guild_id][user_id] = datetime.now().timestamp() + cooldown_seconds
-
-def is_bot_manager(interaction: discord.Interaction):
-    if interaction.user.guild_permissions.manage_guild:
-        return True
-    guild_data = get_guild_data(interaction.guild_id)
-    manager_role_id = guild_data.get("manager_role")
-    if manager_role_id is None:
-        return False
-    manager_role = interaction.guild.get_role(manager_role_id)
-    if manager_role is None:
-        return False
-    return manager_role in interaction.user.roles
-
-def is_bot_owner(interaction: discord.Interaction):
-    return interaction.user.id == BOT_OWNER_ID
-
-def is_moderator(interaction: discord.Interaction):
-    return interaction.user.guild_permissions.manage_guild
-
-def is_manager(interaction: discord.Interaction):
-    if is_moderator(interaction):
-        return True
-    guild_data = get_guild_data(interaction.guild_id)
-    manager_role_id = guild_data.get("manager_role")
-    if manager_role_id is None:
-        return False
-    manager_role = interaction.guild.get_role(manager_role_id)
-    if manager_role is None:
-        return False
-    return manager_role in interaction.user.roles
-
-@tasks.loop(minutes=5)
+@tasks.loop(hours=1)
 async def manage_active_roles_loop():
-    """Periodically scans all guilds and syncs active member roles."""
+    """Manages active roles hourly using the baseline activity system logic."""
     try:
-        data = load_shame_data()
-        for guild_id_str, guild_config in data.items():
+        await bot.wait_until_ready()
+        print("🕒 [Role Sync Engine] Commencing scheduled active member evaluation...")
+        
+        for guild in bot.guilds:
+            guild_config = get_guild_data(guild.id)
             role_id = guild_config.get("active_member_role")
             if not role_id:
                 continue
                 
-            guild = bot.get_guild(int(guild_id_str))
-            if not guild:
-                continue
-                
             role = guild.get_role(role_id)
-            if not role or not guild.me.guild_permissions.manage_roles or guild.me.top_role <= role:
+            if not role:
                 continue
                 
             window_days = guild_config.get("activity_window_days", 7)
             cutoff = datetime.now() - timedelta(days=window_days)
             
-            guild_activity = user_activity.get(guild_id_str, {})
-            
+            guild_activity = user_activity.get(str(guild.id), {})
             active_user_ids = set()
-            for u_id_str, ts_str in guild_activity.items():
+            
+            for uid_str, ts_str in guild_activity.items():
                 try:
                     if datetime.fromisoformat(ts_str) >= cutoff:
-                        active_user_ids.add(int(u_id_str))
+                        active_user_ids.add(int(uid_str))
                 except Exception:
                     pass
             
@@ -670,7 +617,6 @@ async def manage_active_roles_loop():
             for member in guild.members:
                 if member.bot:
                     continue
-                    
                 should_have = member.id in active_user_ids
                 has_role = role in member.roles
                 
@@ -679,14 +625,17 @@ async def manage_active_roles_loop():
                         await member.add_roles(role, reason="Active member threshold matched recent message logs.")
                         if broadcast_channel:
                             await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
-                            
                     elif not should_have and has_role:
                         await member.remove_roles(role, reason="User fell out of specified activity threshold parameters.")
                         if broadcast_channel:
                             await broadcast_channel.send(f"📉 `{member.name}` lost the `{role.name}` role due to inactivity.", silent=True)
                 except discord.Forbidden:
                     pass
+                except Exception as e:
+                    print(f"Failed to synchronize role updates for {member.name}: {e}")
                     
+            refresh_critical_amount(guild.id)
+            
     except Exception as e:
         print(f"Error in manage_active_roles_loop task frame: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
@@ -698,87 +647,68 @@ async def discord_backup_loop():
     await run_discord_channel_backup()
 
 @bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user.name} ({bot.user.id})')
+    print('------')
+    
+    # Load persistence flat files
+    load_vote_data()
+    load_user_activity()
+    
+    # Start loop processes
+    if not check_expired_votes.is_running():
+        check_expired_votes.start()
+    if not manage_active_roles_loop.is_running():
+        manage_active_roles_loop.start()
+    if not discord_backup_loop.is_running():
+        discord_backup_loop.start()
+        
+    # Trigger non-blocking async history scraper
+    asyncio.create_task(scan_guild_history_async())
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} application commands globally.")
+    except Exception as e:
+        print(f"Failed to sync application tree parameters: {e}")
+
+@bot.event
 async def on_guild_join(guild):
     get_guild_data(guild.id)
     print(f"Joined guild: {guild.name} (ID: {guild.id})")
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Ignore bots and DMs
-    if message.author.bot or message.guild is None:
+    if message.author.bot or not message.guild:
         return
         
-    guild_id_str = str(message.guild.id)
-    user_id_str = str(message.author.id)
+    update_user_activity(message.guild.id, message.author.id)
     
-    if guild_id_str not in user_activity:
-        user_activity[guild_id_str] = {}
-        
-    now_str = datetime.now().isoformat()
-    
-    # Migrate old v1.5 data to list format on the fly, then append new message
-    if user_id_str in user_activity[guild_id_str]:
-        if isinstance(user_activity[guild_id_str][user_id_str], str):
-            user_activity[guild_id_str][user_id_str] = [user_activity[guild_id_str][user_id_str]]
-        user_activity[guild_id_str][user_id_str].append(now_str)
-    else:
-        user_activity[guild_id_str][user_id_str] = [now_str]
-        
-    # Prune list to only keep messages within the window timeframe to save memory
-    guild_data = get_guild_data(message.guild.id)
-    window_days = guild_data.get("activity_window_days", 7)
-    cutoff = datetime.now() - timedelta(days=window_days)
-    
-    user_activity[guild_id_str][user_id_str] = [
-        ts for ts in user_activity[guild_id_str][user_id_str] 
-        if datetime.fromisoformat(ts) > cutoff
-    ]
-    
-    # Save the file (assuming you have a save function like this)
-    with open(USER_ACTIVITY_FILE, "w") as f:
-        json.dump(user_activity, f)
-        
-    # Always process commands after on_message
+    guild_config = get_guild_data(message.guild.id)
+    role_id = guild_config.get("active_member_role")
+    if role_id:
+        role = message.guild.get_role(role_id)
+        if role and role not in message.author.roles:
+            try:
+                await message.author.add_roles(role, reason="Message activity recognized.")
+                broadcast_channel_id = guild_config.get("activity_broadcast_channel")
+                if broadcast_channel_id:
+                    broadcast_channel = message.guild.get_channel(broadcast_channel_id)
+                    if broadcast_channel:
+                        await broadcast_channel.send(f"🎉 `{message.author.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
+            except discord.Forbidden:
+                pass
+                
     await bot.process_commands(message)
 
-@bot.event
-async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
-        
-    load_vote_data()
-    load_user_activity()
-    
-    for guild_id_str in vote_data.keys():
-        refresh_critical_amount(guild_id_str)
-        
-    if not check_expired_votes.is_running():
-        check_expired_votes.start()
-        
-    if not discord_backup_loop.is_running():
-        discord_backup_loop.start()
-        
-    if not manage_active_roles_loop.is_running():
-        manage_active_roles_loop.start()
-        
-    asyncio.create_task(scan_guild_history_async())
-        
-    await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
+# --- APPLICATION SLASH COMMANDS ---
 
-
-# ==========================================
-# 1. FOUNDATIONAL COMMANDS
-# ==========================================
-@bot.tree.command(name="info", description="Get bot information")
+@bot.tree.command(name="info", description="Display configuration settings and statistics parameters.")
 async def info(interaction: discord.Interaction):
-    # --- DM RESPONSE FORMAT ---
+    # --- DM DIRECT FALLBACK ---
     if interaction.guild is None:
         response_text = (
-            "**General Stuff**\n"
+            "ℹ️ **Global Bot Status Summary**\n"
             f"Version: {BOT_VERSION}\n\n"
             "For more detailed information for a specific server, use this same command in that specific server."
         )
@@ -789,53 +719,48 @@ async def info(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "info"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
-    
+        
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
-    
+
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
+
     # Format Roles with backticks
     manager_role_id = guild_data.get("manager_role")
     manager_role = interaction.guild.get_role(manager_role_id) if manager_role_id else None
-    manager_role_text = f"`{manager_role.name}`" if manager_role else "None"
-    
+    manager_role_text = f"`@{manager_role.name}`" if manager_role else "Not Set"
+
     am_role_id = guild_data.get("active_member_role")
     am_role = interaction.guild.get_role(am_role_id) if am_role_id else None
-    am_role_text = f"`{am_role.name}`" if am_role else "Not Set"
-    
-    disabled_cmds = ", ".join(guild_data.get("disabled_commands", [])) or "None"
-    
-    # Format Expiry Timer
-    expiry_timer = guild_data.get("expiry_days", "Not Set")
-    if expiry_timer != "Not Set":
-        expiry_timer = f"{expiry_timer} days"
-        
+    am_role_text = f"`@{am_role.name}`" if am_role else "Not Set"
+
+    # Clean channel representation tags
     shame_channel_id = guild_data.get("shame_channel")
     shame_channel = f"<#{shame_channel_id}>" if shame_channel_id else "Not Set"
-    
-    # Format Vote to Kick
-    votekick_ban_duration = guild_data.get("votekick_ban_duration", 7)
+
     vk_bc_id = guild_data.get("votekick_broadcast_channel")
     vk_bc = f"<#{vk_bc_id}>" if vk_bc_id else "Not Set"
-    
-    # Calculate Critical Amount (adjust math below if you use a specific percentage)
-    active_count = get_active_member_count(interaction.guild_id)
-    # Example math: Critical amount is 10% of active members, minimum of 3. Update to match your actual formula!
-    critical_amount = max(3, int(active_count * 0.10)) 
-    
+
     act_bc_id = guild_data.get("activity_broadcast_channel")
     act_bc = f"<#{act_bc_id}>" if act_bc_id else "Not Set"
-    
-    # Format Activity Window
-    act_win_days = guild_data.get("activity_window_days", 7)
-    act_win_msgs = guild_data.get("activity_window_messages", 1)
-    
+
+    expiry_days = guild_data.get("expiry_days")
+    expiry_timer = f"{expiry_days} Days" if expiry_days is not None else "Infinite"
+    votekick_ban_duration = f"{guild_data.get('votekick_ban_duration', 7)} Days"
+
+    disabled_cmds_list = guild_data.get("disabled_commands", [])
+    disabled_cmds = ", ".join([f"`/{c}`" for c in disabled_cmds_list]) if disabled_cmds_list else "None"
+
+    # Compute server sizing structures safely
+    active_members = get_active_users_count(interaction.guild)
+    critical_amount = get_critical_amount(interaction.guild_id)
+    act_win = guild_data.get("activity_window_days", 7)
+
     response_text = (
         "**General Stuff**\n"
         f"Version: {BOT_VERSION}\n"
@@ -846,325 +771,108 @@ async def info(interaction: discord.Interaction):
         f"Shame Entry Expiry Timer: {expiry_timer}\n"
         f"Shame Broadcast Channel: {shame_channel}\n\n"
         "**Vote to Kick Stuff**\n"
-        f"Critical Amount: {critical_amount}\n"
-        f"Vote to Kick Ban Duration: {votekick_ban_duration} days\n"
-        f"Vote to Kick Broadcast Channel: {vk_bc}\n\n"
+        f"Vote to Kick Ban Duration: {votekick_ban_duration}\n"
+        f"Vote to Kick Broadcast Channel: {vk_bc}\n"
+        f"Active Members (Last {act_win} Days): {active_members}\n"
+        f"Required Votes (10% threshold): {critical_amount}\n\n"
         "**Activity Stuff**\n"
         f"Active Member Role: {am_role_text}\n"
-        f"Activity Broadcast Channel: {act_bc}\n"
-        f"Activity Window: {act_win_msgs} messages in the last {act_win_days} days"
+        f"Activity Requirement Window: {act_win} Days\n"
+        f"Activity Broadcast Channel: {act_bc}"
     )
-    
+
     await interaction.response.send_message(response_text)
 
-@bot.tree.command(name="cooldown", description="Set command cooldown for the server (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(seconds="Cooldown in seconds (0-30)")
-async def set_cooldown_cmd(interaction: discord.Interaction, seconds: int):
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-    if seconds < 0 or seconds > 30:
-        await interaction.response.send_message("❌ Cooldown must be between 0 and 30 seconds.", ephemeral=True)
-        return
-    
-    guild_data = get_guild_data(interaction.guild_id)
-    guild_data["cooldown"] = seconds
-    update_guild_data(interaction.guild_id, guild_data)
-    
-    if interaction.guild_id in cooldowns:
-        cooldowns[interaction.guild_id].clear()
-    
-    await interaction.response.send_message(f"✅ Command cooldown set to {seconds} seconds\nAll existing cooldowns have been reset.")
-
-@bot.tree.command(name="enable", description="Enable a bot command in this server (Moderator only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(command="The command to enable")
-@app_commands.autocomplete(command=command_autocomplete)
-async def enable_cmd(interaction: discord.Interaction, command: str):
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
-        return
-    if not is_valid_command(command):
-        await interaction.response.send_message(f"❌ The command `{command}` does not exist.", ephemeral=True)
-        return
-    if not is_command_disabled(interaction.guild_id, command.lower()):
-        await interaction.response.send_message(f"❌ The command `{command}` is already enabled in this server.", ephemeral=True)
-        return
-    
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
-    enable_command(interaction.guild_id, command.lower())
-    await interaction.response.send_message(f"✅ The `{command}` command has been enabled in this server.")
-
-@bot.tree.command(name="disable", description="Disable a bot command in this server (Moderator only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(command="The command to disable")
-@app_commands.autocomplete(command=command_autocomplete)
-async def disable_cmd(interaction: discord.Interaction, command: str):
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
-        return
-    if not is_valid_command(command):
-        await interaction.response.send_message(f"❌ The command `{command}` does not exist.", ephemeral=True)
-        return
-    if command.lower() in ["enable", "disable"]:
-        await interaction.response.send_message("❌ You cannot disable the enable or disable commands.", ephemeral=True)
-        return
-    if is_command_disabled(interaction.guild_id, command.lower()):
-        await interaction.response.send_message(f"❌ The command `{command}` is already disabled in this server.", ephemeral=True)
-        return
-    
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
-    disable_command(interaction.guild_id, command.lower())
-    await interaction.response.send_message(f"🟠 The `{command}` command has been disabled in this server.")
-
-@bot.tree.command(name="set_manager_role", description="Set the bot manager role (Moderator only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(role="The role to set as manager")
-async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
-        return
-    
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
-    guild_data["manager_role"] = role.id
-    update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message(f"✅ Manager role set to **{role.name}**")
-
-@bot.tree.command(name="reset_manager_role", description="Reset manager role (Moderator only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-async def reset_manager_role(interaction: discord.Interaction):
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
-        return
-    
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
-    guild_data["manager_role"] = None
-    update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("✅ Manager role reset to server owner only")
-
-# ==========================================
-# 3. SHAME COMMANDS
-# ==========================================
-@bot.tree.command(name="shame_config_set", description="Configure server Shame settings (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(
-    channel="The text channel where shame broadcasts are targeted",
-    expiry_days="The number of days an entry remains visible before expiring"
-)
-async def shame_config_set(interaction: discord.Interaction, channel: discord.TextChannel = None, expiry_days: int = None):
-    if is_command_disabled(interaction.guild_id, "shame_config_set"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
-        return
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-    if channel is None and expiry_days is None:
-        await interaction.response.send_message("⚠️ Provide at least a `channel` or `expiry_days` to update.", ephemeral=True)
-        return
-    if expiry_days is not None and expiry_days < 1:
-        await interaction.response.send_message("❌ Expiry duration must be at least 1 day.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    changes = []
-    if channel is not None:
-        guild_data["shame_channel"] = channel.id
-        changes.append(f"• Shame Broadcast Channel set to {channel.mention}")
-    if expiry_days is not None:
-        guild_data["expiry_days"] = expiry_days
-        changes.append(f"• Shame Entry Expiry Timer set to `{expiry_days}` days")
-
-    update_guild_data(interaction.guild_id, guild_data)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"✅ **Shame Configuration Updated**\n" + "\n".join(changes))
-
-@bot.tree.command(name="shame_config_reset", description="Reset shame configurations to default (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(attribute="The setting to reset")
-@app_commands.choices(attribute=[
-    app_commands.Choice(name="Shame Broadcast Channel", value="channel"),
-    app_commands.Choice(name="Expiry Timer", value="timer"),
-])
-async def shame_config_reset(interaction: discord.Interaction, attribute: str):
-    if is_command_disabled(interaction.guild_id, "shame_config_reset"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
-        return
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    if attribute == "channel":
-        guild_data["shame_channel"] = None
-        display = "Shame Broadcast Channel"
-    elif attribute == "timer":
-        guild_data["expiry_days"] = None
-        display = "Shame Entry Expiry Timer"
-
-    update_guild_data(interaction.guild_id, guild_data)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been reset to default.")
-
-@bot.tree.command(name="shame", description="Add a user to the hall of shame (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(user="The user to add", reason="Reason for shame", date="Optional date (YYYY-MM-DD format)")
-async def shame(interaction: discord.Interaction, user: discord.User, reason: str, date: str = None):
+@bot.tree.command(name="shame", description="Add an entry to the hall of shame")
+@app_commands.guild_only()
+async def shame(interaction: discord.Interaction, user: discord.Member, reason: str):
     if is_command_disabled(interaction.guild_id, "shame"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
+        
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
+
     if not is_manager(interaction):
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
-    
+
+    if user.bot:
+        await interaction.response.send_message("❌ You cannot shame a bot.", ephemeral=True)
+        return
+
     guild_data = get_guild_data(interaction.guild_id)
-    remove_expired_entries(guild_data)
-    
-    if guild_data.get("expiry_days") is None:
-        await interaction.response.send_message("❌ Shame entry expiry time must be set before adding entries. Use `/shame_config_set` to configure it.", ephemeral=True)
-        return
-    
-    if guild_data.get("shame_channel") is None:
-        await interaction.response.send_message("❌ Shame channel must be set before adding entries. Use `/shame_config_set` to configure it.", ephemeral=True)
-        return
-    
-    if date:
-        try:
-            entry_date = datetime.strptime(date, "%Y-%m-%d")
-            entry_date = entry_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            entry_date_iso = entry_date.isoformat()
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid date format. Please use YYYY-MM-DD (e.g., 2026-05-10)", ephemeral=True)
-            return
-    else:
-        entry_date = datetime.now()
-        entry_date_iso = entry_date.isoformat()
-    
-    expiry_days = guild_data.get("expiry_days")
-    entry_date_obj = datetime.fromisoformat(entry_date_iso)
-    expiry_date = entry_date_obj + timedelta(days=expiry_days)
-    
-    if datetime.now() > expiry_date:
-        await interaction.response.send_message(f"❌ Cannot add shame entry for {date or 'today'} - it has already expired.", ephemeral=True)
-        return
-    
-    entry_id = len(guild_data["entries"]) + 1
-    entry = {
-        "user_id": user.id,
-        "username": user.name,
-        "reason": reason,
-        "date": entry_date_iso,
-        "added_by": interaction.user.name
-    }
-    
-    guild_data["entries"][str(entry_id)] = entry
-    update_guild_data(interaction.guild_id, guild_data)
-    
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
+
+    remove_expired_entries(guild_data)
+
+    # Generate incremental numerical ID
+    existing_ids = [int(k) for k in guild_data["entries"].keys()]
+    next_id = str(max(existing_ids) + 1) if existing_ids else "1"
+
+    guild_data["entries"][next_id] = {
+        "user_id": user.id,
+        "username": user.name,
+        "reason": reason,
+        "date": datetime.now().isoformat(),
+        "shamed_by": interaction.user.name
+    }
+    update_guild_data(interaction.guild_id, guild_data)
+
     response_lines = [
-        f"🚨 **{user.name}** has been added to the hall of shame",
+        f"🚨 **{user.name}** has been added to the hall of shame!",
         f"**Reason:** {reason}",
-        f"**Date:** {entry_date_iso.split('T')[0]}",
-        f"**Entry ID:** {entry_id}",
-        f"*Added by `{interaction.user.name}`*"
+        f"**Entry ID:** {next_id}"
     ]
-    await interaction.response.send_message("\n".join(response_lines))
-    
+
+    # Optional channel cross-posting logic integration
     shame_channel_id = guild_data.get("shame_channel")
     if shame_channel_id:
         shame_channel = interaction.guild.get_channel(shame_channel_id)
-        if shame_channel:
-            broadcast_text = f"🚨 **Hall O' Shame**\n**{user.name}** has been added to the hall of shame, for: {reason}."
+        if shame_channel and shame_channel.permissions_for(interaction.guild.me).send_messages:
             try:
-                await shame_channel.send(broadcast_text, silent=True)
+                await shame_channel.send("\n".join(response_lines))
+                await interaction.response.send_message(f"✅ Successfully shamed {user.name} and logged into the broadcast channel.", ephemeral=True)
+                return
             except discord.Forbidden:
                 pass
 
-@bot.tree.command(name="unshame", description="Remove a user from the hall of shame (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(entry_id="The entry ID to remove", reason="Optional reason for removal")
+    await interaction.response.send_message("\n".join(response_lines))
+
+@bot.tree.command(name="unshame", description="Remove an entry from the hall of shame")
+@app_commands.guild_only()
 async def unshame(interaction: discord.Interaction, entry_id: int, reason: str = None):
     if is_command_disabled(interaction.guild_id, "unshame"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
+        
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
+
     if not is_manager(interaction):
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
-    
+
     guild_data = get_guild_data(interaction.guild_id)
-    entry_id_str = str(entry_id)
-    
-    if entry_id_str not in guild_data["entries"]:
-        await interaction.response.send_message(f"❌ Entry ID {entry_id} not found.", ephemeral=True)
-        return
-    
-    entry = guild_data["entries"][entry_id_str]
-    del guild_data["entries"][entry_id_str]
-    update_guild_data(interaction.guild_id, guild_data)
-    
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
+
+    entry_id_str = str(entry_id)
+    if entry_id_str not in guild_data["entries"]:
+        await interaction.response.send_message("❌ Entry ID not found.", ephemeral=True)
+        return
+
+    entry = guild_data["entries"][entry_id_str]
+    del guild_data["entries"][entry_id_str]
+    update_guild_data(interaction.guild_id, guild_data)
+
     response_lines = [
         f"✅ **{entry['username']}** has been removed from the hall of shame",
         f"**Original Reason:** {entry['reason']}"
@@ -1173,460 +881,315 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
         response_lines.append(f"**Removal Reason:** {reason}")
     response_lines.append(f"**Entry ID:** {entry_id_str}")
     response_lines.append(f"*Removed by `{interaction.user.name}`*")
-    
+
     await interaction.response.send_message("\n".join(response_lines))
 
 @bot.tree.command(name="list_my_shame", description="List your hall of shame entries")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
+@app_commands.guild_only()
 async def list_my_shame(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "list_my_shame"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
+        
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
-    
+
     guild_data = get_guild_data(interaction.guild_id)
-    remove_expired_entries(guild_data)
-    update_guild_data(interaction.guild_id, guild_data)
-    
-    user_entries = []
-    for entry_id, entry in guild_data["entries"].items():
-        if entry["user_id"] == interaction.user.id:
-            user_entries.append((entry_id, entry))
-    
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
+
+    remove_expired_entries(guild_data)
+
+    user_entries = {k: v for k, v in guild_data["entries"].items() if v["user_id"] == interaction.user.id}
+
     if not user_entries:
-        await interaction.response.send_message("✅ **Your Hall of Shame**\nYou have no entries in the hall of shame!")
+        await interaction.response.send_message("✅ You have no entries in the hall of shame.", ephemeral=True)
         return
-    
-    response_lines = [
-        "**Your Hall of Shame**",
-        f"**Shame Count**: {len(user_entries)}\n"
-    ]
-    
-    expiry_days = guild_data.get("expiry_days", 30)
-    
-    for idx, (entry_id, entry) in enumerate(user_entries, 1):
+
+    expiry_days = guild_data.get("expiry_days")
+    response_lines = [f"📋 **Hall of Shame Entries for {interaction.user.name}:**\n"]
+
+    for eid, entry in user_entries.items():
         entry_date = datetime.fromisoformat(entry["date"])
-        expiry_date = entry_date + timedelta(days=expiry_days)
         entry_timestamp = int(entry_date.timestamp())
-        expiry_timestamp = int(expiry_date.timestamp())
+        reason = entry.get("reason", "No reason provided")
         
-        response_lines.append(f"**Entry {idx}:**")
-        response_lines.append(f"└ <t:{entry_timestamp}:d> - Expires <t:{expiry_timestamp}:R>")
-        response_lines.append(f"  *Reason:* {entry['reason']}\n")
-    
-    await interaction.response.send_message("\n".join(response_lines)[:1995])
-
-@bot.tree.command(name="list_all_shame", description="List all hall of shame entries")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-async def list_all_shame(interaction: discord.Interaction):
-    if is_command_disabled(interaction.guild_id, "list_all_shame"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
-        return
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.2f} more seconds.", ephemeral=True)
-        return
-    
-    guild_data = get_guild_data(interaction.guild_id)
-    remove_expired_entries(guild_data)
-    update_guild_data(interaction.guild_id, guild_data)
-    
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    
-    if not guild_data["entries"]:
-        await interaction.response.send_message("✅ **Hall of Shame**\nThe hall of shame is empty!")
-        return
-    
-    user_shame_count = {}
-    for entry_id, entry in guild_data["entries"].items():
-        user_id = entry["user_id"]
-        if user_id not in user_shame_count:
-            user_shame_count[user_id] = {"count": 0, "entries": []}
-        user_shame_count[user_id]["count"] += 1
-        user_shame_count[user_id]["entries"].append((entry_id, entry))
-    
-    response_lines = ["**Hall of Shame Counts**\n"]
-    expiry_days = guild_data.get("expiry_days", 30)
-    
-    def sort_key(item):
-        user_id, data = item
-        count = data["count"]
-        most_recent = max((datetime.fromisoformat(entry["date"]) for entry_id, entry in data["entries"]), default=datetime.min)
-        return (-count, -most_recent.timestamp())
-    
-    for user_id, data in sorted(user_shame_count.items(), key=sort_key):
-        member = interaction.guild.get_member(user_id)
-        user_display = f"`{member.name}`" if member else f"User {user_id}"
-        count = data["count"]
-        response_lines.append(f"**{user_display}** - {count} entries:")
-        
-        for entry_id, entry in data["entries"]:
-            entry_date = datetime.fromisoformat(entry["date"])
+        if expiry_days is not None:
             expiry_date = entry_date + timedelta(days=expiry_days)
-            entry_timestamp = int(entry_date.timestamp())
             expiry_timestamp = int(expiry_date.timestamp())
-            reason = entry.get("reason", "No reason provided")
-            response_lines.append(f"└ <t:{entry_timestamp}:d> (expires <t:{expiry_timestamp}:R>) - {reason}")
-            
+            response_lines.append(f"🔹 **ID: {eid}** - {reason}\n└ Added <t:{entry_timestamp}:d> (Expires <t:{expiry_timestamp}:R>)")
+        else:
+            response_lines.append(f"🔹 **ID: {eid}** - {reason}\n└ Added <t:{entry_timestamp}:d> (Permanent Entry)")
+
+    await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
+
+@bot.tree.command(name="shameboard", description="View the server's hall of shame database hierarchy leaderboard.")
+@app_commands.guild_only()
+async def shameboard(interaction: discord.Interaction):
+    if is_command_disabled(interaction.guild_id, "shameboard"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+        
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    remove_expired_entries(guild_data)
+
+    if not guild_data["entries"]:
+        await interaction.response.send_message("🕊️ The Hall of Shame is currently clean and empty.", ephemeral=True)
+        return
+
+    # Count occurrences across matching user references
+    user_counts = {}
+    for entry in guild_data["entries"].values():
+        uid = entry["user_id"]
+        if uid not in user_counts:
+            user_counts[uid] = {"username": entry["username"], "count": 0}
+        user_counts[uid]["count"] += 1
+
+    sorted_users = sorted(user_counts.items(), key=lambda x: x[1]["count"], reverse=True)
+    expiry_days = guild_data.get("expiry_days")
+
+    response_lines = ["🏆 **Server Hall of Shame Leaderboard** 🏆\n"]
+    for index, (uid, info_dict) in enumerate(sorted_users, 1):
+        medal = "🥇 " if index == 1 else "🥈 " if index == 2 else "🥉 " if index == 3 else f"**#{index}** "
+        response_lines.append(f"{medal}`{info_dict['username']}` — {info_dict['count']} active entry/entries")
+        
+        # Pull sub-items for inspection
+        for eid, entry in guild_data["entries"].items():
+            if entry["user_id"] == uid:
+                entry_date = datetime.fromisoformat(entry["date"])
+                expiry_date = entry_date + timedelta(days=expiry_days) if expiry_days is not None else None
+                entry_timestamp = int(entry_date.timestamp())
+                expiry_timestamp = int(expiry_date.timestamp()) if expiry_date else None
+                reason = entry.get("reason", "No reason provided")
+                
+                if expiry_timestamp:
+                    response_lines.append(f"  └ `ID: {eid}` <t:{entry_timestamp}:d> (expires <t:{expiry_timestamp}:R>) - *{reason}*")
+                else:
+                    response_lines.append(f"  └ `ID: {eid}` <t:{entry_timestamp}:d> (Permanent) - *{reason}*")
         response_lines.append("")
-        
-    await interaction.response.send_message("\n".join(response_lines)[:1995])
 
-# ==========================================
-# 4. VOTEKICK COMMANDS
-# ==========================================
-@bot.tree.command(name="votekick_config_set", description="Configure votekick settings (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(
-    channel="The channel for votekick broadcasts",
-    ban_duration="Ban duration in days (0-7)"
-)
-async def votekick_config_set(interaction: discord.Interaction, channel: discord.TextChannel = None, ban_duration: int = None):
-    if is_command_disabled(interaction.guild_id, "votekick_config_set"):
+    await interaction.response.send_message("\n".join(response_lines))
+
+@bot.tree.command(name="votekick", description="Initiate a democratic kick election against a problematic member.")
+@app_commands.guild_only()
+async def votekick(interaction: discord.Interaction, user: discord.Member):
+    if is_command_disabled(interaction.guild_id, "votekick"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-    if channel is None and ban_duration is None:
-        await interaction.response.send_message("⚠️ Provide either a `channel` or `ban_duration` to update.", ephemeral=True)
-        return
-    if ban_duration is not None and (ban_duration < 0 or ban_duration > 7):
-        await interaction.response.send_message("❌ Ban duration must be between 0 (kick only) and 7 days.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    changes = []
-    if channel is not None:
-        guild_data["votekick_broadcast_channel"] = channel.id
-        changes.append(f"• Votekick Broadcast Channel set to {channel.mention}")
-    if ban_duration is not None:
-        guild_data["votekick_ban_duration"] = ban_duration
-        changes.append(f"• Votekick Ban Duration set to `{ban_duration}` days")
-
-    update_guild_data(interaction.guild_id, guild_data)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"✅ **Votekick Configuration Updated**\n" + "\n".join(changes))
-
-@bot.tree.command(name="votekick_config_reset", description="Reset votekick settings (Manager only)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-@app_commands.describe(attribute="The setting to reset")
-@app_commands.choices(attribute=[
-    app_commands.Choice(name="Broadcast Channel", value="channel"),
-    app_commands.Choice(name="Ban Duration", value="duration"),
-])
-async def votekick_config_reset(interaction: discord.Interaction, attribute: str):
-    if is_command_disabled(interaction.guild_id, "votekick_config_reset"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
-        return
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    if attribute == "channel":
-        guild_data["votekick_broadcast_channel"] = None
-        display = "Votekick Broadcast Channel"
-    elif attribute == "duration":
-        guild_data["votekick_ban_duration"] = 7
-        display = "Votekick Ban Duration (Reset to 7 Days)"
-
-    update_guild_data(interaction.guild_id, guild_data)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been reset to default.")
-
-@bot.tree.command(name="vote", description="Vote to kick a user")
-@app_commands.describe(user="The user to vote for", anonymous="Whether your vote is anonymous (default: True)")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-async def vote(interaction: discord.Interaction, user: discord.Member, anonymous: bool = True):
-    await interaction.response.defer(ephemeral=True)
-    if is_command_disabled(interaction.guild_id, "vote"):
-        await interaction.followup.send("❌ This command is disabled in this server.")
-        return
-    if user.id == interaction.user.id:
-        await interaction.followup.send("❌ You cannot vote for yourself.")
-        return
-    if user.bot:
-        await interaction.followup.send("❌ You cannot vote to kick a bot.")
-        return
-    if interaction.guild.owner_id == user.id:
-        await interaction.followup.send("❌ You can't vote to kick the server owner.")
-        return
-    
-    bot_member = interaction.guild.me
-    if user.top_role >= bot_member.top_role:
-        await interaction.followup.send("❌ I can't kick that person. Please ask a moderator to move my role higher.")
-        return
-    
-    guild_vote_data = get_vote_data(interaction.guild_id)
-    has_voted = False
-    voted_user_id = None
-    for target_id, voters in guild_vote_data.items():
-        if str(interaction.user.id) in voters:
-            has_voted = True
-            voted_user_id = int(target_id)
-            break
-    
-    if has_voted:
-        voted_user = interaction.guild.get_member(voted_user_id)
-        voted_user_mention = voted_user.mention if voted_user else f"<@{voted_user_id}>"
-        await interaction.followup.send(f"❌ You have already voted for {voted_user_mention}. Use `/unvote` to remove your vote first.")
-        return
-    
-    if str(user.id) not in guild_vote_data:
-        guild_vote_data[str(user.id)] = {}
-    
-    # Save both timestamp and exact anonymity selection
-    guild_vote_data[str(user.id)][str(interaction.user.id)] = {
-        "timestamp": datetime.now().isoformat(),
-        "anonymous": anonymous
-    }
-    save_vote_data()
-    
-    vote_count = len(guild_vote_data[str(user.id)])
-    await interaction.followup.send(f"✅ Your vote has been counted for {user.name}.")
-    critical_amount = refresh_critical_amount(interaction.guild_id)
-    
-    if anonymous:
-        await interaction.channel.send(f"🟠 Someone voted for `{user.name}` ({vote_count}/{critical_amount}).", silent=True)
-    else:
-        await interaction.channel.send(f"🟠 `{interaction.user.name}` voted for `{user.name}` ({vote_count}/{critical_amount}).", silent=True)
-    
-    if vote_count >= critical_amount:
-        guild_data = get_guild_data(interaction.guild_id)
-        ban_duration = guild_data.get("votekick_ban_duration", 7)
         
-        try:
-            if ban_duration > 0:
-                await user.ban(reason=f"Vote to kick - reached critical amount (ban for {ban_duration} days)", delete_message_days=0)
-                await interaction.channel.send(f"🚨 **{user.name}** has been banned for {ban_duration} days due to reaching the critical vote threshold!", silent=True)
-            else:
-                await user.kick(reason="Vote to kick - reached critical amount")
-                await interaction.channel.send(f"🚨 **{user.name}** has been kicked due to reaching the critical vote threshold!", silent=True)
-            
-            clear_all_votes_in_guild(interaction.guild_id)
-        except discord.Forbidden:
-            action_type = f"banned for {ban_duration} days" if ban_duration > 0 else "kicked"
-            await interaction.channel.send(f"⚠️ **{user.name}** should have been {action_type}, but I lack permission.", silent=True)
+    # Defer interaction early to allow for the rich fetch resolution fallback loops
+    await interaction.response.defer()
 
-@bot.tree.command(name="unvote", description="Remove your vote")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-async def unvote(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if is_command_disabled(interaction.guild_id, "unvote"):
-        await interaction.followup.send("❌ This command is disabled in this server.")
-        return
-    
-    guild_vote_data = get_vote_data(interaction.guild_id)
-    voted_user_id = None
-    for target_id, voters in guild_vote_data.items():
-        if str(interaction.user.id) in voters:
-            voted_user_id = int(target_id)
-            break
-    
-    if voted_user_id is None:
-        await interaction.followup.send("❌ You haven't voted yet.")
-        return
-    
-    voted_user = interaction.guild.get_member(voted_user_id)
-    voted_user_name = voted_user.name if voted_user else f"User {voted_user_id}"
-    del guild_vote_data[str(voted_user_id)][str(interaction.user.id)]
-    
-    if not guild_vote_data[str(voted_user_id)]:
-        del guild_vote_data[str(voted_user_id)]
-    
-    save_vote_data()
-    vote_count = len(guild_vote_data.get(str(voted_user_id), {}))
-    await interaction.followup.send(f"✅ You removed your vote from {voted_user_name}.")
-    critical_amount = refresh_critical_amount(interaction.guild_id)
-    await interaction.channel.send(f"🟠 Someone unvoted `{voted_user_name}` ({vote_count}/{critical_amount}).", silent=True)
-
-@bot.tree.command(name="votedata", description="View all active kick votes, who has them, and who voted")
-@app_commands.guild_only()  # 🚨 CRITICAL: Prevents this command from ever showing up or running in DMs
-async def votedata(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)
-    
-    if is_command_disabled(interaction.guild_id, "votedata"):
-        await interaction.followup.send("❌ This command is disabled in this server.")
-        return
-        
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
         return
 
     guild_vote_data = get_vote_data(interaction.guild_id)
-    
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    if not guild_vote_data:
-        await interaction.followup.send("✅ There are currently no active kick votes against anyone in this server.")
+    if user.bot:
+        await interaction.followup.send("❌ You cannot invoke democracy against artificial synthetic logic instances.")
         return
 
-    critical_amount = refresh_critical_amount(interaction.guild_id)
-    response_lines = ["**Current Kick Vote Standings:**\n"]
+    if user.id == interaction.user.id:
+        await interaction.followup.send("❌ You cannot cast an electoral execution protocol upon yourself.")
+        return
 
-    for target_id_str, voters_dict in guild_vote_data.items():
-        target_id = int(target_id_str)
-        target_member = interaction.guild.get_member(target_id)
-        target_name = f"`{target_member.name}`" if target_member else f"Unknown User ({target_id})"
+    # Restrict actions against Administrators or Server Owners
+    if user.guild_permissions.administrator or user.id == interaction.guild.owner_id:
+        await interaction.followup.send("❌ Target member holds sovereign immune administrative clearance privileges.")
+        return
+
+    target_id_str = str(user.id)
+    voter_id_str = str(interaction.user.id)
+    current_time = datetime.now()
+
+    # Pre-calculate structures early
+    critical_amount = get_critical_amount(interaction.guild_id)
+
+    if target_id_str not in guild_vote_data:
+        guild_vote_data[target_id_str] = {}
+
+    if voter_id_str in guild_vote_data[target_id_str]:
+        # Refresh vote instead of throwing a hard blocking exception structure
+        guild_vote_data[target_id_str][voter_id_str] = current_time.isoformat()
+        save_vote_data()
+        current_votes = len(guild_vote_data[target_id_str])
+        await interaction.followup.send(f"🔄 Your active vote tracking timestamp for `{user.name}` has been successfully updated. ({current_votes}/{critical_amount})")
+        return
+
+    # Add vote record entry parameter
+    guild_vote_data[target_id_str][voter_id_str] = current_time.isoformat()
+    save_vote_data()
+
+    current_votes = len(guild_vote_data[target_id_str])
+
+    if current_votes >= critical_amount:
+        # Democratic execution conditions satisfied -> execute ban payload
+        del guild_vote_data[target_id_str]
+        save_vote_data()
+
+        ban_duration_days = guild_data.get("votekick_ban_duration", 7)
         
-        vote_count = len(voters_dict)
-        voter_displays = []
-        anon_count = 0
-        
-        for voter_id_str, vote_info in voters_dict.items():
-            voter_id = int(voter_id_str)
-            
-            # Defensive check: handle old legacy string formats vs new dict format
-            is_anon = True
-            if isinstance(vote_info, dict):
-                is_anon = vote_info.get("anonymous", True)
-            
-            if is_anon:
-                anon_count += 1
-            else:
-                voter_member = interaction.guild.get_member(voter_id)
-                if voter_member:
-                    voter_displays.append(f"`{voter_member.name}`")
-                else:
-                    voter_displays.append(f"Left Server ({voter_id})")
+        try:
+            # Dispatch notifications to the target prior to severing interaction pathways
+            try:
+                await user.send(f"🚨 You have been democratically exiled from **{interaction.guild.name}** via vote-kick consensus matching for {ban_duration_days} days.")
+            except Exception:
+                pass
 
-        voters_string = ""
-        if voter_displays or anon_count > 0:
-            combined_voters = list(voter_displays)
-            if anon_count > 0:
-                combined_voters.append(f"Anonymous x{anon_count}" if anon_count > 1 else "Anonymous")
-            voters_string = f", voted by: {', '.join(combined_voters)}"
+            await interaction.guild.ban(user, delete_message_days=0, reason=f"Democratically banned via Votekick threshold matching ({current_votes}/{critical_amount})")
             
-        response_lines.append(f"{target_name} - {vote_count}/{critical_amount}{voters_string}")
+            # Record an automatic reference log structure tracking the exile timeframe parameters
+            existing_ids = [int(k) for k in guild_data["entries"].keys()]
+            next_id = str(max(existing_ids) + 1) if existing_ids else "1"
+            
+            guild_data["entries"][next_id] = {
+                "user_id": user.id,
+                "username": user.name,
+                "reason": f"Democratically exiled for {ban_duration_days} days via votekick processing.",
+                "date": current_time.isoformat(),
+                "shamed_by": "System Consensus Process"
+            }
+            update_guild_data(interaction.guild_id, guild_data)
 
-    final_response = "\n".join(response_lines)
-    await interaction.followup.send(final_response[:1995])
+            await interaction.followup.send(f"🔨 **Exile Protocol Finalized!** `{user.name}` has accumulated sufficient consensus markers ({current_votes}/{critical_amount}) and has been banned for {ban_duration_days} days.")
+            
+            # Async auto-unban task handling integration
+            async def scheduled_unban_callback():
+                await asyncio.sleep(ban_duration_days * 86400)
+                try:
+                    await interaction.guild.unban(discord.Object(id=user.id), reason="Democratic vote-kick ban duration cycle completed.")
+                except Exception:
+                    pass
+            
+            asyncio.create_task(scheduled_unban_callback())
 
-# ==========================================
-# 5. ACTIVITY COMMANDS
-# ==========================================
-@bot.tree.command(name="activity_config_set", description="Configure activity settings (Manager only)")
+        except discord.Forbidden:
+            await interaction.followup.send("❌ **Execution Error:** Bot lacks permission hierarchies required to ban this target.")
+    else:
+        # Broadcast continuing progress tracking parameters
+        await interaction.followup.send(f"🗳️ **Consensus Registered!** `{interaction.user.name}` voted to kick `{user.name}`. Progress: ({current_votes}/{critical_amount} required matching markers). Votes expire in 24 hours.")
+
+# --- ADMINISTRATIVE CONFIGURATION MANAGEMENT TREE ---
+
+@bot.tree.command(name="config_setup", description="Configure server setup roles and parameters.")
 @app_commands.guild_only()
-@app_commands.describe(
-    role="The active member role",
-    channel="The activity broadcast channel",
-    window_days="Activity window threshold in days",
-    window_messages="Number of messages required in the window"
-)
-async def activity_config_set(interaction: discord.Interaction, role: discord.Role = None, channel: discord.TextChannel = None, window_days: int = None, window_messages: int = None):
-    if is_command_disabled(interaction.guild_id, "activity_config_set"):
+async def config_setup(
+    interaction: discord.Interaction, 
+    manager_role: discord.Role = None, 
+    shame_channel: discord.TextChannel = None, 
+    votekick_broadcast_channel: discord.TextChannel = None,
+    activity_broadcast_channel: discord.TextChannel = None,
+    active_member_role: discord.Role = None,
+    expiry_days: int = None,
+    votekick_ban_duration: int = None,
+    activity_window_days: int = None
+):
+    if is_command_disabled(interaction.guild_id, "config_setup"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
-    
+        
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
-        
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-        
-    if role is None and channel is None and window_days is None and window_messages is None:
-        await interaction.response.send_message("⚠️ Provide a `role`, `channel`, `window_days`, or `window_messages` to update.", ephemeral=True)
-        return
-        
-    if window_days is not None and window_days <= 0:
-        await interaction.response.send_message("❌ Activity window days must be at least 1.", ephemeral=True)
-        return
-        
-    if window_messages is not None and window_messages <= 0:
-        await interaction.response.send_message("❌ Required messages must be at least 1.", ephemeral=True)
+
+    if not is_moderator(interaction):
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
 
-    # Fetch current configuration FIRST to compare incoming values
     guild_data = get_guild_data(interaction.guild_id)
-    current_role_id = guild_data.get("active_member_role")
-
-    # ==========================================
-    # SECURITY LOCK: Privilege Escalation Checks
-    # ==========================================
-    if role is not None and role.id != current_role_id:
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ **Security Lock:** You must natively possess the 'Manage Roles' permission to configure a new active role.", ephemeral=True)
-            return
-        if not interaction.guild.me.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ **Security Lock:** I do not have the 'Manage Roles' permission required to assign this role.", ephemeral=True)
-            return
-        if interaction.user.id != interaction.guild.owner_id and interaction.user.top_role <= role:
-            await interaction.response.send_message("❌ **Security Lock:** Your highest role must be strictly above the role you are trying to configure.", ephemeral=True)
-            return
-        if interaction.guild.me.top_role <= role:
-            await interaction.response.send_message("❌ **Security Lock:** My highest role must be strictly above the role you are trying to configure.", ephemeral=True)
-            return
-        if role.permissions.value != 0:
-            await interaction.response.send_message("❌ **Security Lock:** The target role must have absolutely NO server-level permissions.", ephemeral=True)
-            return
-    # ==========================================
-
-    changes = []
-    
-    if role is not None and role.id != current_role_id:
-        guild_data["active_member_role"] = role.id
-        changes.append(f"• Active Member Role set to **{role.name}**")
-        
-    if channel is not None and channel.id != guild_data.get("activity_broadcast_channel"):
-        guild_data["activity_broadcast_channel"] = channel.id
-        changes.append(f"• Activity Broadcast Channel set to {channel.mention}")
-        
-    if window_days is not None and window_days != guild_data.get("activity_window_days"):
-        guild_data["activity_window_days"] = window_days
-        changes.append(f"• Activity Window Days set to `{window_days}`")
-        
-    if window_messages is not None and window_messages != guild_data.get("activity_window_messages"):
-        guild_data["activity_window_messages"] = window_messages
-        changes.append(f"• Activity Window Messages set to `{window_messages}`")
-
-    if not changes:
-        await interaction.response.send_message("⚠️ No new changes were made; the provided values already match the current configuration.", ephemeral=True)
-        return
-
-    update_guild_data(interaction.guild_id, guild_data)
-    
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-        
-    await interaction.response.send_message(f"✅ **Activity Configuration Updated**\n" + "\n".join(changes), ephemeral=True)
 
-@bot.tree.command(name="activity_config_reset", description="Reset activity settings (Manager only)")
+    changes = []
+    if manager_role is not None:
+        guild_data["manager_role"] = manager_role.id
+        changes.append(f"Manager Role -> `@{manager_role.name}`")
+    if shame_channel is not None:
+        guild_data["shame_channel"] = shame_channel.id
+        changes.append(f"Shame Broadcast Channel -> <#{shame_channel.id}>")
+    if votekick_broadcast_channel is not None:
+        guild_data["votekick_broadcast_channel"] = votekick_broadcast_channel.id
+        changes.append(f"Votekick Broadcast Channel -> <#{votekick_broadcast_channel.id}>")
+    if activity_broadcast_channel is not None:
+        guild_data["activity_broadcast_channel"] = activity_broadcast_channel.id
+        changes.append(f"Activity Broadcast Channel -> <#{activity_broadcast_channel.id}>")
+    if active_member_role is not None:
+        guild_data["active_member_role"] = active_member_role.id
+        changes.append(f"Active Member Role -> `@{active_member_role.name}`")
+    if expiry_days is not None:
+        guild_data["expiry_days"] = None if expiry_days <= 0 else expiry_days
+        changes.append(f"Shame Expiry Days -> `{guild_data['expiry_days']}`")
+    if votekick_ban_duration is not None:
+        guild_data["votekick_ban_duration"] = max(1, votekick_ban_duration)
+        changes.append(f"Votekick Ban Duration -> `{guild_data['votekick_ban_duration']} Days`")
+    if activity_window_days is not None:
+        guild_data["activity_window_days"] = max(1, activity_window_days)
+        changes.append(f"Activity Window Days -> `{guild_data['activity_window_days']} Days`")
+
+    if not changes:
+        await interaction.response.send_message("ℹ️ No modification arguments were passed. System properties intact.", ephemeral=True)
+        return
+
+    update_guild_data(interaction.guild_id, guild_data)
+    refresh_critical_amount(interaction.guild_id)
+    
+    await interaction.response.send_message(f"⚙️ **Configuration Properties Updated:**\n" + "\n".join([f"🔹 {c}" for c in changes]))
+
+@bot.tree.command(name="config_cooldown", description="Modify the system anti-spam execution throttle timeframe limits.")
 @app_commands.guild_only()
-@app_commands.describe(attribute="The setting to reset")
+async def config_cooldown(interaction: discord.Interaction, seconds: int):
+    if is_command_disabled(interaction.guild_id, "config_cooldown"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+        
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_moderator(interaction):
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
+        return
+
+    if seconds < 0 or seconds > 30:
+        await interaction.response.send_message("❌ Cooldown must be between 0 and 30 seconds.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["cooldown"] = seconds
+    update_guild_data(interaction.guild_id, guild_data)
+
+    if interaction.guild_id in cooldowns:
+        cooldowns[interaction.guild_id].clear()
+
+    await interaction.response.send_message(f"⏱️ **Cooldown Threshold Synchronized:** Global command throttle adjusted to `{seconds}s` for this guild context.")
+
+@bot.tree.command(name="activity_config_reset", description="Reset configuration elements back to native default fallbacks.")
+@app_commands.guild_only()
 @app_commands.choices(attribute=[
     app_commands.Choice(name="Active Member Role", value="role"),
-    app_commands.Choice(name="Broadcast Channel", value="channel"),
-    app_commands.Choice(name="Activity Window", value="window"),
+    app_commands.Choice(name="Activity Broadcast Channel", value="channel"),
+    app_commands.Choice(name="Activity Evaluation Window (7 Days)", value="window")
 ])
 async def activity_config_reset(interaction: discord.Interaction, attribute: str):
     if is_command_disabled(interaction.guild_id, "activity_config_reset"):
@@ -1649,16 +1212,95 @@ async def activity_config_reset(interaction: discord.Interaction, attribute: str
         display = "Activity Broadcast Channel"
     elif attribute == "window":
         guild_data["activity_window_days"] = 7
-        guild_data["activity_window_messages"] = 1
-        display = "Activity Window (Reset to 1 message in 7 Days)"
+        display = "Activity Window (Reset to 7 Days)"
 
     update_guild_data(interaction.guild_id, guild_data)
     cooldown_seconds = guild_data.get("cooldown", 0)
     
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been reset to default.", ephemeral=True)
+    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been returned to its standard system fallback value state.")
 
-# Run the bot
+@bot.tree.command(name="command_restrict", description="Restrict specific modular slash command usage accessibility flags.")
+@app_commands.guild_only()
+async def command_restrict(interaction: discord.Interaction, command: str):
+    if is_command_disabled(interaction.guild_id, "command_restrict"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+        
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_moderator(interaction):
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
+        return
+
+    if not is_valid_command(command):
+        await interaction.response.send_message(f"❌ The command `{command}` does not exist.", ephemeral=True)
+        return
+
+    if command.lower() in ["command_restrict", "command_unrestrict", "info"]:
+        await interaction.response.send_message(f"❌ Core engine control primitive `{command}` cannot be altered.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    disabled_commands = guild_data.get("disabled_commands", [])
+
+    if command in disabled_commands:
+        await interaction.response.send_message(f"ℹ️ Command `/{command}` is already under active server-side execution bans.", ephemeral=True)
+        return
+
+    disabled_commands.append(command)
+    guild_data["disabled_commands"] = disabled_commands
+    update_guild_data(interaction.guild_id, guild_data)
+
+    await interaction.response.send_message(f"🔒 **Access Restriction Imposed:** `/{command}` has been completely disabled for standard members within this guild.")
+
+@bot.tree.command(name="command_unrestrict", description="Restore standard access configurations to a restricted slash command tool.")
+@app_commands.guild_only()
+async def command_unrestrict(interaction: discord.Interaction, command: str):
+    if is_command_disabled(interaction.guild_id, "command_unrestrict"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+        
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_moderator(interaction):
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
+        return
+
+    if not is_valid_command(command):
+        await interaction.response.send_message(f"❌ The command `{command}` does not exist.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    disabled_commands = guild_data.get("disabled_commands", [])
+
+    if command not in disabled_commands:
+        await interaction.response.send_message(f"ℹ️ Command `/{command}` is already running under normal inherited accessibility settings.", ephemeral=True)
+        return
+
+    disabled_commands.remove(command)
+    guild_data["disabled_commands"] = disabled_commands
+    update_guild_data(interaction.guild_id, guild_data)
+
+    await interaction.response.send_message(f"🔓 **Access Restriction Lifted:** `/{command}` is now available for registration and use by normal endpoints again.")
+
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    if TOKEN:
+        bot.run(TOKEN)
+    else:
+        print("🚨 Critical Setup Error: DISCORD_TOKEN environmental string injection variable missing!")
