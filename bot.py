@@ -21,13 +21,12 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.6.1"
+BOT_VERSION = "1.6.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
 DATA_FILE = "shame_data.json"
 VOTE_DATA_FILE = "vote_data.json"
-USER_ACTIVITY_FILE = "user_activity.json"
 
 # Cooldown tracking: {guild_id: {user_id: timestamp}}
 cooldowns = {}
@@ -35,8 +34,8 @@ cooldowns = {}
 # Vote data: {guild_id: {target_user_id: {voter_id: vote_timestamp}}}
 vote_data = {}
 
-# User activity data: {guild_id: {user_id: last_message_timestamp}}
-user_activity = {}
+# Active users cache (populated hourly): {guild_id: {user_id_set}}
+active_users_cache = {}
 
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
@@ -68,10 +67,7 @@ async def broadcast_error_log(message_content: str):
     try:
         if not bot.is_ready():
             return
-        
-        # Fetch the bot owner directly via ID
         owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
-        
         if owner:
             for i in range(0, len(message_content), 1900):
                 chunk = message_content[i:i+1900]
@@ -81,13 +77,9 @@ async def broadcast_error_log(message_content: str):
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    """Intercepts app command errors globally and reports tracebacks to your channel."""
-    
-    # 1. Ignore silent check failures (like our custom DM blocker below)
     if isinstance(error, app_commands.CheckFailure):
         return
 
-    # 2. Catch TransformerErrors (like Member/Role resolution) that happen in DMs BEFORE checks run
     if interaction.guild is None and interaction.command and interaction.command.name != "info":
         try:
             error_msg = "❌ This command can only be used in servers."
@@ -99,7 +91,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             pass
         return
 
-    # 3. Standard error reporting
     tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
     tb_text = "".join(tb_lines)
     
@@ -124,7 +115,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 @bot.tree.interaction_check
 async def global_dm_check(interaction: discord.Interaction) -> bool:
-    """Globally blocks all commands from running in DMs except for /info."""
     if interaction.guild is None and interaction.command and interaction.command.name != "info":
         await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
         return False
@@ -135,7 +125,6 @@ async def run_discord_channel_backup():
     try:
         data = load_shame_data()
         
-        # We no longer use a guild ID for tracking the backup timer, so we use a system key
         if "system_metadata" not in data:
             data["system_metadata"] = {}
         
@@ -148,14 +137,13 @@ async def run_discord_channel_backup():
                 print("⏱️ Discord Backup Skipped: Last archive was sent less than 24 hours ago.")
                 return
 
-        # Fetch the owner to DM the files to
         owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
         if not owner:
             print("❌ Backup Error: Bot owner not found.")
             return
 
         files_to_send = []
-        for file_name in [DATA_FILE, VOTE_DATA_FILE, USER_ACTIVITY_FILE]:
+        for file_name in [DATA_FILE, VOTE_DATA_FILE]:
             if os.path.exists(file_name):
                 files_to_send.append(discord.File(file_name))
 
@@ -171,7 +159,6 @@ async def run_discord_channel_backup():
         )
         print("💾 Success: Live JSON files dispatched to dev DM.")
 
-        # Update the timestamp
         data["system_metadata"]["last_dev_dm_backup"] = now.isoformat()
         save_shame_data(data)
 
@@ -181,7 +168,6 @@ async def run_discord_channel_backup():
         await broadcast_error_log(f"⚠️ **Discord Backup Engine Failed:**\n```python\n{tb}\n```")
 
 def load_shame_data():
-    """Load shame data from JSON file safely with corruption handling."""
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r') as f:
@@ -192,7 +178,6 @@ def load_shame_data():
     return {}
 
 def save_shame_data(data):
-    """Save shame data to JSON file atomically to prevent corruption/loss."""
     tmp_file = DATA_FILE + ".tmp"
     try:
         with open(tmp_file, 'w') as f:
@@ -204,7 +189,6 @@ def save_shame_data(data):
         asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_shame_data`)** — Disk likely full!\n```python\n{tb}\n```"))
 
 def get_guild_data(guild_id):
-    """Get or create guild data."""
     data = load_shame_data()
     guild_id_str = str(guild_id)
     if guild_id_str not in data:
@@ -216,22 +200,20 @@ def get_guild_data(guild_id):
             "votekick_ban_duration": 7,
             "entries": {},
             "disabled_commands": [],
+            "activity_message_threshold": 1,
         }
         save_shame_data(data)
     return data[guild_id_str]
 
 def get_all_data():
-    """Get all data."""
     return load_shame_data()
 
 def update_guild_data(guild_id, guild_data):
-    """Update guild data."""
     data = load_shame_data()
     data[str(guild_id)] = guild_data
     save_shame_data(data)
 
 def load_vote_data():
-    """Load vote data from JSON file with corruption handling."""
     global vote_data
     if os.path.exists(VOTE_DATA_FILE):
         try:
@@ -243,7 +225,6 @@ def load_vote_data():
     vote_data = {}
 
 def save_vote_data():
-    """Save vote data to JSON file atomically."""
     tmp_file = VOTE_DATA_FILE + ".tmp"
     try:
         with open(tmp_file, 'w') as f:
@@ -255,140 +236,18 @@ def save_vote_data():
         asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_vote_data`)** — Disk likely full!\n```python\n{tb}\n```"))
 
 def get_vote_data(guild_id):
-    """Get or create vote data for a guild."""
     guild_id_str = str(guild_id)
     if guild_id_str not in vote_data:
         vote_data[guild_id_str] = {}
         save_vote_data()
     return vote_data[guild_id_str]
 
-def load_user_activity():
-    """Load user activity data from JSON file with corruption handling."""
-    global user_activity
-    if os.path.exists(USER_ACTIVITY_FILE):
-        try:
-            with open(USER_ACTIVITY_FILE, 'r') as f:
-                user_activity = json.load(f)
-                return
-        except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{USER_ACTIVITY_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
-    user_activity = {}
-
-def save_user_activity():
-    """Save user activity data to JSON file atomically."""
-    tmp_file = USER_ACTIVITY_FILE + ".tmp"
-    try:
-        with open(tmp_file, 'w') as f:
-            json.dump(user_activity, f, indent=4)
-        os.replace(tmp_file, USER_ACTIVITY_FILE)
-    except Exception as e:
-        print(f"Error saving user activity safely: {e}")
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_user_activity`)** — Disk likely full!\n```python\n{tb}\n```"))
-
-def get_user_activity(guild_id, user_id):
-    """Get last message timestamp for a user in a guild."""
-    guild_id_str = str(guild_id)
-    user_id_str = str(user_id)
-    if guild_id_str not in user_activity:
-        return None
-    if user_id_str not in user_activity[guild_id_str]:
-        return None
-    return datetime.fromisoformat(user_activity[guild_id_str][user_id_str])
-
-def update_user_activity(guild_id, user_id):
-    """Update user's last message timestamp."""
-    guild_id_str = str(guild_id)
-    user_id_str = str(user_id)
-    if guild_id_str not in user_activity:
-        user_activity[guild_id_str] = {}
-    user_activity[guild_id_str][user_id_str] = datetime.now().isoformat()
-    save_user_activity()
-
-async def scan_guild_history_async():
-    """Scans text channel history for all joined guilds in the background."""
-    await bot.wait_until_ready()
-    print("🔍 [History Scanner] Starting background message history sync across all guilds...")
-    
-    try:
-        now = datetime.now()
-        cutoff = now - timedelta(days=7)
-        updated_any = False
-
-        for guild in bot.guilds:
-            print(f"📊 [History Scanner] Analyzing guild: {guild.name} ({guild.id})")
-            guild_id_str = str(guild.id)
-            
-            if guild_id_str not in user_activity:
-                user_activity[guild_id_str] = {}
-
-            for channel in guild.text_channels:
-                perms = channel.permissions_for(guild.me)
-                if not perms.read_messages or not perms.read_message_history:
-                    continue
-                
-                try:
-                    async for message in channel.history(after=cutoff, limit=1000):
-                        if message.author.bot:
-                            continue
-                        
-                        user_id_str = str(message.author.id)
-                        msg_time = message.created_at.replace(tzinfo=None)
-                        
-                        existing_ts_str = user_activity[guild_id_str].get(user_id_str)
-                        if existing_ts_str:
-                            existing_ts = datetime.fromisoformat(existing_ts_str)
-                            if msg_time > existing_ts:
-                                user_activity[guild_id_str][user_id_str] = msg_time.isoformat()
-                                updated_any = True
-                        else:
-                            user_activity[guild_id_str][user_id_str] = msg_time.isoformat()
-                            updated_any = True
-                            
-                except discord.Forbidden:
-                    continue
-                except Exception as channel_err:
-                    print(f"⚠️ [History Scanner] Could not read channel {channel.name}: {channel_err}")
-            
-            refresh_critical_amount(guild.id)
-
-        if updated_any:
-            save_user_activity()
-            print("💾 [History Scanner] Historical synchronization complete. user_activity.json updated.")
-        else:
-            print("ℹ️ [History Scanner] Historical scan finished. No newer logs found to overwrite cache.")
-            
-        await broadcast_error_log("🔄 **Background Message History Sync Complete!** Server metrics successfully restored.")
-
-    except Exception as e:
-        print(f"Error in scan_guild_history_async: {e}")
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"🚨 **History Scanner Runtime Failure:**\n```python\n{tb}\n```")
-
 def get_active_users_count(guild: discord.Guild) -> int:
-    """Count active users using stored activity data."""
-    guild_config = get_guild_data(guild.id)
-    window_days = guild_config.get("activity_window_days", 7)
-    cutoff = datetime.now() - timedelta(days=window_days)
-    
-    guild_activity = user_activity.get(str(guild.id), {})
-    active_count = 0
-    
-    for member in guild.members:
-        if member.bot:
-            continue
-        ts_str = guild_activity.get(str(member.id))
-        if ts_str:
-            try:
-                if datetime.fromisoformat(ts_str) >= cutoff:
-                    active_count += 1
-            except Exception:
-                pass
-                
+    """Count active users using the hourly cached active users set."""
+    active_count = len(active_users_cache.get(guild.id, set()))
     return max(1, active_count)
 
 def remove_expired_votes():
-    """Remove expired votes from all guilds and return affected users."""
     affected_users = {}
     current_time = datetime.now()
     one_day_ago = current_time - timedelta(hours=24)
@@ -428,14 +287,12 @@ def remove_expired_votes():
     return affected_users
 
 def clear_all_votes_in_guild(guild_id: int):
-    """Clear all votes in a guild."""
     guild_id_str = str(guild_id)
     if guild_id_str in vote_data:
         del vote_data[guild_id_str]
         save_vote_data()
 
 def remove_expired_entries(guild_data):
-    """Remove expired shame entries from guild data."""
     expiry_days = guild_data.get("expiry_days")
     if expiry_days is None:
         return
@@ -454,38 +311,16 @@ def remove_expired_entries(guild_data):
         del guild_data["entries"][entry_id]
 
 def is_command_disabled(guild_id, command_name):
-    """Check if a command is disabled in a guild."""
     guild_data = get_guild_data(guild_id)
     return command_name in guild_data.get("disabled_commands", [])
 
-def disable_command(guild_id, command_name):
-    """Disable a command in a guild."""
-    guild_data = get_guild_data(guild_id)
-    disabled_commands = guild_data.get("disabled_commands", [])
-    if command_name not in disabled_commands:
-        disabled_commands.append(command_name)
-        guild_data["disabled_commands"] = disabled_commands
-        update_guild_data(guild_id, guild_data)
-
-def enable_command(guild_id, command_name):
-    """Enable a command in a guild."""
-    guild_data = get_guild_data(guild_id)
-    disabled_commands = guild_data.get("disabled_commands", [])
-    if command_name in disabled_commands:
-        disabled_commands.remove(command_name)
-        guild_data["disabled_commands"] = disabled_commands
-        update_guild_data(guild_id, guild_data)
-
 def get_all_command_names():
-    """Get all available bot command names."""
     return sorted([cmd.name for cmd in bot.tree.get_commands() if not isinstance(cmd, discord.app_commands.ContextMenu)])
 
 def is_valid_command(command_name: str) -> bool:
-    """Check if a command string matches a real command name registration."""
     return command_name in get_all_command_names()
 
 def is_manager(interaction: discord.Interaction) -> bool:
-    """Check if user has the custom manager role or Manage Server permission."""
     if interaction.user.guild_permissions.manage_guild:
         return True
     guild_data = get_guild_data(interaction.guild_id)
@@ -497,17 +332,14 @@ def is_manager(interaction: discord.Interaction) -> bool:
     return False
 
 def is_moderator(interaction: discord.Interaction) -> bool:
-    """Strictly checks if user has standard Manage Server guild permissions."""
     return interaction.user.guild_permissions.manage_guild
 
 def set_cooldown(guild_id, user_id, seconds):
-    """Set cooldown for a user in a guild."""
     if guild_id not in cooldowns:
         cooldowns[guild_id] = {}
     cooldowns[guild_id][user_id] = datetime.now() + timedelta(seconds=seconds)
 
 def check_cooldown(guild_id, user_id):
-    """Check if user is on cooldown in guild."""
     if guild_id not in cooldowns:
         return 0
     if user_id not in cooldowns[guild_id]:
@@ -520,7 +352,6 @@ def check_cooldown(guild_id, user_id):
 
 @tasks.loop(minutes=1)
 async def check_expired_votes():
-    """Background task frame loop executing once a minute to sweep old active votekicks."""
     try:
         current_time = datetime.now()
         one_day_ago = current_time - timedelta(hours=24)
@@ -538,7 +369,6 @@ async def check_expired_votes():
             for target_id_str in list(vote_data[guild_id_str].keys()):
                 expired_voters = []
                 for voter_id_str, ts_str in vote_data[guild_id_str][target_id_str].items():
-                    # Safely support legacy single string timestamp format fallback
                     vote_time = datetime.fromisoformat(ts_str)
                     if vote_time < one_day_ago:
                         expired_voters.append(voter_id_str)
@@ -550,7 +380,6 @@ async def check_expired_votes():
                     
                     target_member = guild.get_member(int(target_id_str)) or await bot.fetch_user(int(target_id_str))
                     
-                    # Resolve appropriate channel target (Custom Votekick -> System Channel -> Fallback Text Channel)
                     broadcast_channel = None
                     if vk_bc_id:
                         custom_channel = guild.get_channel(vk_bc_id)
@@ -583,33 +412,46 @@ async def check_expired_votes():
 
 @tasks.loop(hours=1)
 async def manage_active_roles_loop():
-    """Manages active roles hourly using the baseline activity system logic."""
+    """Scans history hourly to compute active members and assign roles based on message threshold."""
     try:
         await bot.wait_until_ready()
-        print("🕒 [Role Sync Engine] Commencing scheduled active member evaluation...")
+        print("🕒 [Role Sync Engine] Commencing hourly historical scan & role evaluation...")
         
         for guild in bot.guilds:
             guild_config = get_guild_data(guild.id)
+            window_days = guild_config.get("activity_window_days", 7)
+            threshold = guild_config.get("activity_message_threshold", 1)
+            cutoff = datetime.now() - timedelta(days=window_days)
+            
+            user_message_counts = {}
+            
+            for channel in guild.text_channels:
+                perms = channel.permissions_for(guild.me)
+                if not perms.read_messages or not perms.read_message_history:
+                    continue
+                try:
+                    async for message in channel.history(after=cutoff, limit=None):
+                        if message.author.bot:
+                            continue
+                        user_id = message.author.id
+                        user_message_counts[user_id] = user_message_counts.get(user_id, 0) + 1
+                except discord.Forbidden:
+                    continue
+                except Exception as channel_err:
+                    print(f"⚠️ [Role Sync Engine] Could not read channel {channel.name}: {channel_err}")
+
+            active_user_ids = {uid for uid, count in user_message_counts.items() if count >= threshold}
+            active_users_cache[guild.id] = active_user_ids
+            
             role_id = guild_config.get("active_member_role")
             if not role_id:
+                refresh_critical_amount(guild.id)
                 continue
                 
             role = guild.get_role(role_id)
             if not role:
+                refresh_critical_amount(guild.id)
                 continue
-                
-            window_days = guild_config.get("activity_window_days", 7)
-            cutoff = datetime.now() - timedelta(days=window_days)
-            
-            guild_activity = user_activity.get(str(guild.id), {})
-            active_user_ids = set()
-            
-            for uid_str, ts_str in guild_activity.items():
-                try:
-                    if datetime.fromisoformat(ts_str) >= cutoff:
-                        active_user_ids.add(int(uid_str))
-                except Exception:
-                    pass
             
             broadcast_channel_id = guild_config.get("activity_broadcast_channel")
             broadcast_channel = guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
@@ -622,11 +464,11 @@ async def manage_active_roles_loop():
                 
                 try:
                     if should_have and not has_role:
-                        await member.add_roles(role, reason="Active member threshold matched recent message logs.")
+                        await member.add_roles(role, reason=f"Met active threshold ({threshold} msgs).")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
+                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to meeting the activity threshold!", silent=True)
                     elif not should_have and has_role:
-                        await member.remove_roles(role, reason="User fell out of specified activity threshold parameters.")
+                        await member.remove_roles(role, reason="User fell below the activity threshold parameters.")
                         if broadcast_channel:
                             await broadcast_channel.send(f"📉 `{member.name}` lost the `{role.name}` role due to inactivity.", silent=True)
                 except discord.Forbidden:
@@ -643,7 +485,6 @@ async def manage_active_roles_loop():
 
 @tasks.loop(hours=24)
 async def discord_backup_loop():
-    """Triggers the automated file attachment transfer sequence every 24 hours."""
     await run_discord_channel_backup()
 
 @bot.event
@@ -651,11 +492,8 @@ async def on_ready():
     print(f'Logged in as {bot.user.name} ({bot.user.id})')
     print('------')
     
-    # Load persistence flat files
     load_vote_data()
-    load_user_activity()
     
-    # Start loop processes
     if not check_expired_votes.is_running():
         check_expired_votes.start()
     if not manage_active_roles_loop.is_running():
@@ -663,9 +501,6 @@ async def on_ready():
     if not discord_backup_loop.is_running():
         discord_backup_loop.start()
         
-    # Trigger non-blocking async history scraper
-    asyncio.create_task(scan_guild_history_async())
-    
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} application commands globally.")
@@ -681,31 +516,12 @@ async def on_guild_join(guild):
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
-        
-    update_user_activity(message.guild.id, message.author.id)
-    
-    guild_config = get_guild_data(message.guild.id)
-    role_id = guild_config.get("active_member_role")
-    if role_id:
-        role = message.guild.get_role(role_id)
-        if role and role not in message.author.roles:
-            try:
-                await message.author.add_roles(role, reason="Message activity recognized.")
-                broadcast_channel_id = guild_config.get("activity_broadcast_channel")
-                if broadcast_channel_id:
-                    broadcast_channel = message.guild.get_channel(broadcast_channel_id)
-                    if broadcast_channel:
-                        await broadcast_channel.send(f"🎉 `{message.author.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
-            except discord.Forbidden:
-                pass
-                
     await bot.process_commands(message)
 
 # --- APPLICATION SLASH COMMANDS ---
 
 @bot.tree.command(name="info", description="Display configuration settings and statistics parameters.")
 async def info(interaction: discord.Interaction):
-    # --- DM DIRECT FALLBACK ---
     if interaction.guild is None:
         response_text = (
             "ℹ️ **Global Bot Status Summary**\n"
@@ -715,7 +531,6 @@ async def info(interaction: discord.Interaction):
         await interaction.response.send_message(response_text)
         return
 
-    # --- STANDARD SERVER FORMAT ---
     if is_command_disabled(interaction.guild_id, "info"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
@@ -730,7 +545,6 @@ async def info(interaction: discord.Interaction):
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    # Format Roles with backticks
     manager_role_id = guild_data.get("manager_role")
     manager_role = interaction.guild.get_role(manager_role_id) if manager_role_id else None
     manager_role_text = f"`@{manager_role.name}`" if manager_role else "Not Set"
@@ -739,7 +553,6 @@ async def info(interaction: discord.Interaction):
     am_role = interaction.guild.get_role(am_role_id) if am_role_id else None
     am_role_text = f"`@{am_role.name}`" if am_role else "Not Set"
 
-    # Clean channel representation tags
     shame_channel_id = guild_data.get("shame_channel")
     shame_channel = f"<#{shame_channel_id}>" if shame_channel_id else "Not Set"
 
@@ -756,10 +569,10 @@ async def info(interaction: discord.Interaction):
     disabled_cmds_list = guild_data.get("disabled_commands", [])
     disabled_cmds = ", ".join([f"`/{c}`" for c in disabled_cmds_list]) if disabled_cmds_list else "None"
 
-    # Compute server sizing structures safely
     active_members = get_active_users_count(interaction.guild)
     critical_amount = get_critical_amount(interaction.guild_id)
     act_win = guild_data.get("activity_window_days", 7)
+    act_thresh = guild_data.get("activity_message_threshold", 1)
 
     response_text = (
         "**General Stuff**\n"
@@ -778,6 +591,7 @@ async def info(interaction: discord.Interaction):
         "**Activity Stuff**\n"
         f"Active Member Role: {am_role_text}\n"
         f"Activity Requirement Window: {act_win} Days\n"
+        f"Activity Requirement Threshold: {act_thresh} Messages\n"
         f"Activity Broadcast Channel: {act_bc}"
     )
 
@@ -810,7 +624,6 @@ async def shame(interaction: discord.Interaction, user: discord.Member, reason: 
 
     remove_expired_entries(guild_data)
 
-    # Generate incremental numerical ID
     existing_ids = [int(k) for k in guild_data["entries"].keys()]
     next_id = str(max(existing_ids) + 1) if existing_ids else "1"
 
@@ -829,7 +642,6 @@ async def shame(interaction: discord.Interaction, user: discord.Member, reason: 
         f"**Entry ID:** {next_id}"
     ]
 
-    # Optional channel cross-posting logic integration
     shame_channel_id = guild_data.get("shame_channel")
     if shame_channel_id:
         shame_channel = interaction.guild.get_channel(shame_channel_id)
@@ -949,7 +761,6 @@ async def shameboard(interaction: discord.Interaction):
         await interaction.response.send_message("🕊️ The Hall of Shame is currently clean and empty.", ephemeral=True)
         return
 
-    # Count occurrences across matching user references
     user_counts = {}
     for entry in guild_data["entries"].values():
         uid = entry["user_id"]
@@ -965,7 +776,6 @@ async def shameboard(interaction: discord.Interaction):
         medal = "🥇 " if index == 1 else "🥈 " if index == 2 else "🥉 " if index == 3 else f"**#{index}** "
         response_lines.append(f"{medal}`{info_dict['username']}` — {info_dict['count']} active entry/entries")
         
-        # Pull sub-items for inspection
         for eid, entry in guild_data["entries"].items():
             if entry["user_id"] == uid:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -989,7 +799,6 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
-    # Defer interaction early to allow for the rich fetch resolution fallback loops
     await interaction.response.defer()
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
@@ -1011,7 +820,6 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
         await interaction.followup.send("❌ You cannot cast an electoral execution protocol upon yourself.")
         return
 
-    # Restrict actions against Administrators or Server Owners
     if user.guild_permissions.administrator or user.id == interaction.guild.owner_id:
         await interaction.followup.send("❌ Target member holds sovereign immune administrative clearance privileges.")
         return
@@ -1020,35 +828,30 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
     voter_id_str = str(interaction.user.id)
     current_time = datetime.now()
 
-    # Pre-calculate structures early
     critical_amount = get_critical_amount(interaction.guild_id)
 
     if target_id_str not in guild_vote_data:
         guild_vote_data[target_id_str] = {}
 
     if voter_id_str in guild_vote_data[target_id_str]:
-        # Refresh vote instead of throwing a hard blocking exception structure
         guild_vote_data[target_id_str][voter_id_str] = current_time.isoformat()
         save_vote_data()
         current_votes = len(guild_vote_data[target_id_str])
         await interaction.followup.send(f"🔄 Your active vote tracking timestamp for `{user.name}` has been successfully updated. ({current_votes}/{critical_amount})")
         return
 
-    # Add vote record entry parameter
     guild_vote_data[target_id_str][voter_id_str] = current_time.isoformat()
     save_vote_data()
 
     current_votes = len(guild_vote_data[target_id_str])
 
     if current_votes >= critical_amount:
-        # Democratic execution conditions satisfied -> execute ban payload
         del guild_vote_data[target_id_str]
         save_vote_data()
 
         ban_duration_days = guild_data.get("votekick_ban_duration", 7)
         
         try:
-            # Dispatch notifications to the target prior to severing interaction pathways
             try:
                 await user.send(f"🚨 You have been democratically exiled from **{interaction.guild.name}** via vote-kick consensus matching for {ban_duration_days} days.")
             except Exception:
@@ -1056,7 +859,6 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
 
             await interaction.guild.ban(user, delete_message_days=0, reason=f"Democratically banned via Votekick threshold matching ({current_votes}/{critical_amount})")
             
-            # Record an automatic reference log structure tracking the exile timeframe parameters
             existing_ids = [int(k) for k in guild_data["entries"].keys()]
             next_id = str(max(existing_ids) + 1) if existing_ids else "1"
             
@@ -1071,7 +873,6 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
 
             await interaction.followup.send(f"🔨 **Exile Protocol Finalized!** `{user.name}` has accumulated sufficient consensus markers ({current_votes}/{critical_amount}) and has been banned for {ban_duration_days} days.")
             
-            # Async auto-unban task handling integration
             async def scheduled_unban_callback():
                 await asyncio.sleep(ban_duration_days * 86400)
                 try:
@@ -1084,10 +885,7 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
         except discord.Forbidden:
             await interaction.followup.send("❌ **Execution Error:** Bot lacks permission hierarchies required to ban this target.")
     else:
-        # Broadcast continuing progress tracking parameters
         await interaction.followup.send(f"🗳️ **Consensus Registered!** `{interaction.user.name}` voted to kick `{user.name}`. Progress: ({current_votes}/{critical_amount} required matching markers). Votes expire in 24 hours.")
-
-# --- ADMINISTRATIVE CONFIGURATION MANAGEMENT TREE ---
 
 @bot.tree.command(name="config_setup", description="Configure server setup roles and parameters.")
 @app_commands.guild_only()
@@ -1100,7 +898,8 @@ async def config_setup(
     active_member_role: discord.Role = None,
     expiry_days: int = None,
     votekick_ban_duration: int = None,
-    activity_window_days: int = None
+    activity_window_days: int = None,
+    activity_message_threshold: int = None
 ):
     if is_command_disabled(interaction.guild_id, "config_setup"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1145,6 +944,9 @@ async def config_setup(
     if activity_window_days is not None:
         guild_data["activity_window_days"] = max(1, activity_window_days)
         changes.append(f"Activity Window Days -> `{guild_data['activity_window_days']} Days`")
+    if activity_message_threshold is not None:
+        guild_data["activity_message_threshold"] = max(1, activity_message_threshold)
+        changes.append(f"Activity Message Threshold -> `{guild_data['activity_message_threshold']} Messages`")
 
     if not changes:
         await interaction.response.send_message("ℹ️ No modification arguments were passed. System properties intact.", ephemeral=True)
@@ -1189,7 +991,8 @@ async def config_cooldown(interaction: discord.Interaction, seconds: int):
 @app_commands.choices(attribute=[
     app_commands.Choice(name="Active Member Role", value="role"),
     app_commands.Choice(name="Activity Broadcast Channel", value="channel"),
-    app_commands.Choice(name="Activity Evaluation Window (7 Days)", value="window")
+    app_commands.Choice(name="Activity Evaluation Window (7 Days)", value="window"),
+    app_commands.Choice(name="Activity Message Threshold (1 Msg)", value="threshold")
 ])
 async def activity_config_reset(interaction: discord.Interaction, attribute: str):
     if is_command_disabled(interaction.guild_id, "activity_config_reset"):
@@ -1213,6 +1016,9 @@ async def activity_config_reset(interaction: discord.Interaction, attribute: str
     elif attribute == "window":
         guild_data["activity_window_days"] = 7
         display = "Activity Window (Reset to 7 Days)"
+    elif attribute == "threshold":
+        guild_data["activity_message_threshold"] = 1
+        display = "Activity Message Threshold (Reset to 1 Msg)"
 
     update_guild_data(interaction.guild_id, guild_data)
     cooldown_seconds = guild_data.get("cooldown", 0)
@@ -1304,3 +1110,4 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     else:
         print("🚨 Critical Setup Error: DISCORD_TOKEN environmental string injection variable missing!")
+        
