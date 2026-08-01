@@ -21,13 +21,12 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.6.0"
+BOT_VERSION = "1.6.3"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
 DATA_FILE = "shame_data.json"
 VOTE_DATA_FILE = "vote_data.json"
-USER_ACTIVITY_FILE = "user_activity.json"
 
 # Cooldown tracking: {guild_id: {user_id: timestamp}}
 cooldowns = {}
@@ -35,33 +34,11 @@ cooldowns = {}
 # Vote data: {guild_id: {target_user_id: {voter_id: vote_timestamp}}}
 vote_data = {}
 
-# User activity data: {guild_id: {user_id: last_message_timestamp}}
-user_activity = {}
+# Active users cache (populated every 5 mins): {guild_id: {user_id_set}}
+active_users_cache = {}
 
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
-
-def get_active_member_count(guild_id: int) -> int:
-    """Calculates how many members meet the 'X messages in Y days' requirement."""
-    guild_data = get_guild_data(guild_id)
-    window_days = guild_data.get("activity_window_days", 7)
-    window_msgs = guild_data.get("activity_window_messages", 1) # Default to 1 for backwards compatibility
-    
-    cutoff = datetime.now() - timedelta(days=window_days)
-    active_count = 0
-    guild_id_str = str(guild_id)
-    
-    if guild_id_str in user_activity:
-        for uid, timestamps in user_activity[guild_id_str].items():
-            # Safely handle old v1.5 data where timestamp was a single string
-            if isinstance(timestamps, str):
-                timestamps = [timestamps]
-                
-            valid_ts = [ts for ts in timestamps if datetime.fromisoformat(ts) > cutoff]
-            if len(valid_ts) >= window_msgs:
-                active_count += 1
-                
-    return active_count
 
 async def broadcast_error_log(message_content: str):
     """Broadcasts traceback details safely to the bot owner's DMs."""
@@ -155,7 +132,7 @@ async def run_discord_channel_backup():
             return
 
         files_to_send = []
-        for file_name in [DATA_FILE, VOTE_DATA_FILE, USER_ACTIVITY_FILE]:
+        for file_name in [DATA_FILE, VOTE_DATA_FILE]:
             if os.path.exists(file_name):
                 files_to_send.append(discord.File(file_name))
 
@@ -262,130 +239,9 @@ def get_vote_data(guild_id):
         save_vote_data()
     return vote_data[guild_id_str]
 
-def load_user_activity():
-    """Load user activity data from JSON file with corruption handling."""
-    global user_activity
-    if os.path.exists(USER_ACTIVITY_FILE):
-        try:
-            with open(USER_ACTIVITY_FILE, 'r') as f:
-                user_activity = json.load(f)
-                return
-        except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{USER_ACTIVITY_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
-    user_activity = {}
-
-def save_user_activity():
-    """Save user activity data to JSON file atomically."""
-    tmp_file = USER_ACTIVITY_FILE + ".tmp"
-    try:
-        with open(tmp_file, 'w') as f:
-            json.dump(user_activity, f, indent=4)
-        os.replace(tmp_file, USER_ACTIVITY_FILE)
-    except Exception as e:
-        print(f"Error saving user activity safely: {e}")
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_user_activity`)** — Disk likely full!\n```python\n{tb}\n```"))
-
-def get_user_activity(guild_id, user_id):
-    """Get last message timestamp for a user in a guild."""
-    guild_id_str = str(guild_id)
-    user_id_str = str(user_id)
-    if guild_id_str not in user_activity:
-        return None
-    if user_id_str not in user_activity[guild_id_str]:
-        return None
-    return datetime.fromisoformat(user_activity[guild_id_str][user_id_str])
-
-def update_user_activity(guild_id, user_id):
-    """Update user's last message timestamp."""
-    guild_id_str = str(guild_id)
-    user_id_str = str(user_id)
-    if guild_id_str not in user_activity:
-        user_activity[guild_id_str] = {}
-    user_activity[guild_id_str][user_id_str] = datetime.now().isoformat()
-    save_user_activity()
-
-async def scan_guild_history_async():
-    """Scans text channel history for all joined guilds in the background."""
-    await bot.wait_until_ready()
-    print("🔍 [History Scanner] Starting background message history sync across all guilds...")
-    
-    try:
-        now = datetime.now()
-        cutoff = now - timedelta(days=7)
-        updated_any = False
-
-        for guild in bot.guilds:
-            print(f"📊 [History Scanner] Analyzing guild: {guild.name} ({guild.id})")
-            guild_id_str = str(guild.id)
-            
-            if guild_id_str not in user_activity:
-                user_activity[guild_id_str] = {}
-
-            for channel in guild.text_channels:
-                perms = channel.permissions_for(guild.me)
-                if not perms.read_messages or not perms.read_message_history:
-                    continue
-                
-                try:
-                    async for message in channel.history(after=cutoff, limit=1000):
-                        if message.author.bot:
-                            continue
-                        
-                        user_id_str = str(message.author.id)
-                        msg_time = message.created_at.replace(tzinfo=None)
-                        
-                        existing_ts_str = user_activity[guild_id_str].get(user_id_str)
-                        if existing_ts_str:
-                            existing_ts = datetime.fromisoformat(existing_ts_str)
-                            if msg_time > existing_ts:
-                                user_activity[guild_id_str][user_id_str] = msg_time.isoformat()
-                                updated_any = True
-                        else:
-                            user_activity[guild_id_str][user_id_str] = msg_time.isoformat()
-                            updated_any = True
-                            
-                except discord.Forbidden:
-                    continue
-                except Exception as channel_err:
-                    print(f"⚠️ [History Scanner] Could not read channel {channel.name}: {channel_err}")
-            
-            refresh_critical_amount(guild.id)
-
-        if updated_any:
-            save_user_activity()
-            print("💾 [History Scanner] Historical synchronization complete. user_activity.json updated.")
-        else:
-            print("ℹ️ [History Scanner] Historical scan finished. No newer logs found to overwrite cache.")
-            
-        await broadcast_error_log("🔄 **Background Message History Sync Complete!** Server metrics successfully restored.")
-
-    except Exception as e:
-        print(f"Error in scan_guild_history_async: {e}")
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"🚨 **History Scanner Runtime Failure:**\n```python\n{tb}\n```")
-
 def get_active_users_count(guild: discord.Guild) -> int:
-    """Count active users using stored activity data."""
-    guild_config = get_guild_data(guild.id)
-    window_days = guild_config.get("activity_window_days", 7)
-    cutoff = datetime.now() - timedelta(days=window_days)
-    
-    guild_activity = user_activity.get(str(guild.id), {})
-    active_count = 0
-    
-    for member in guild.members:
-        if member.bot:
-            continue
-        ts_str = guild_activity.get(str(member.id))
-        if ts_str:
-            try:
-                if datetime.fromisoformat(ts_str) >= cutoff:
-                    active_count += 1
-            except Exception:
-                pass
-                
-    return max(1, active_count)
+    """Count active users using the in-memory cache populated by the 5-min scanner."""
+    return max(1, len(active_users_cache.get(guild.id, set())))
 
 def remove_expired_votes():
     """Remove expired votes from all guilds and return affected users."""
@@ -635,34 +491,45 @@ def is_manager(interaction: discord.Interaction):
 
 @tasks.loop(minutes=5)
 async def manage_active_roles_loop():
-    """Periodically scans all guilds and syncs active member roles."""
+    """Scans history every 5 mins to compute active members and assign roles based on message threshold."""
+    await bot.wait_until_ready()
     try:
-        data = load_shame_data()
-        for guild_id_str, guild_config in data.items():
+        for guild in bot.guilds:
+            guild_config = get_guild_data(guild.id)
+            window_days = guild_config.get("activity_window_days", 7)
+            threshold = guild_config.get("activity_window_messages", 1)
+            cutoff = datetime.now() - timedelta(days=window_days)
+            
+            user_message_counts = {}
+            
+            for channel in guild.text_channels:
+                perms = channel.permissions_for(guild.me)
+                if not perms.read_messages or not perms.read_message_history:
+                    continue
+                try:
+                    async for message in channel.history(after=cutoff, limit=None):
+                        if message.author.bot:
+                            continue
+                        uid = message.author.id
+                        user_message_counts[uid] = user_message_counts.get(uid, 0) + 1
+                except discord.Forbidden:
+                    continue
+                except Exception:
+                    pass
+
+            # Filter out anyone who hasn't hit the required message threshold
+            active_user_ids = {uid for uid, count in user_message_counts.items() if count >= threshold}
+            active_users_cache[guild.id] = active_user_ids
+            
             role_id = guild_config.get("active_member_role")
             if not role_id:
-                continue
-                
-            guild = bot.get_guild(int(guild_id_str))
-            if not guild:
+                refresh_critical_amount(guild.id)
                 continue
                 
             role = guild.get_role(role_id)
             if not role or not guild.me.guild_permissions.manage_roles or guild.me.top_role <= role:
+                refresh_critical_amount(guild.id)
                 continue
-                
-            window_days = guild_config.get("activity_window_days", 7)
-            cutoff = datetime.now() - timedelta(days=window_days)
-            
-            guild_activity = user_activity.get(guild_id_str, {})
-            
-            active_user_ids = set()
-            for u_id_str, ts_str in guild_activity.items():
-                try:
-                    if datetime.fromisoformat(ts_str) >= cutoff:
-                        active_user_ids.add(int(u_id_str))
-                except Exception:
-                    pass
             
             broadcast_channel_id = guild_config.get("activity_broadcast_channel")
             broadcast_channel = guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
@@ -670,23 +537,23 @@ async def manage_active_roles_loop():
             for member in guild.members:
                 if member.bot:
                     continue
-                    
                 should_have = member.id in active_user_ids
                 has_role = role in member.roles
                 
                 try:
                     if should_have and not has_role:
-                        await member.add_roles(role, reason="Active member threshold matched recent message logs.")
+                        await member.add_roles(role, reason=f"Met active threshold ({threshold} msgs).")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to recent message activity!", silent=True)
-                            
+                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to meeting the activity threshold!", silent=True)
                     elif not should_have and has_role:
-                        await member.remove_roles(role, reason="User fell out of specified activity threshold parameters.")
+                        await member.remove_roles(role, reason="User fell below the activity threshold parameters.")
                         if broadcast_channel:
                             await broadcast_channel.send(f"📉 `{member.name}` lost the `{role.name}` role due to inactivity.", silent=True)
                 except discord.Forbidden:
                     pass
                     
+            refresh_critical_amount(guild.id)
+            
     except Exception as e:
         print(f"Error in manage_active_roles_loop task frame: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
@@ -707,38 +574,6 @@ async def on_message(message: discord.Message):
     # Ignore bots and DMs
     if message.author.bot or message.guild is None:
         return
-        
-    guild_id_str = str(message.guild.id)
-    user_id_str = str(message.author.id)
-    
-    if guild_id_str not in user_activity:
-        user_activity[guild_id_str] = {}
-        
-    now_str = datetime.now().isoformat()
-    
-    # Migrate old v1.5 data to list format on the fly, then append new message
-    if user_id_str in user_activity[guild_id_str]:
-        if isinstance(user_activity[guild_id_str][user_id_str], str):
-            user_activity[guild_id_str][user_id_str] = [user_activity[guild_id_str][user_id_str]]
-        user_activity[guild_id_str][user_id_str].append(now_str)
-    else:
-        user_activity[guild_id_str][user_id_str] = [now_str]
-        
-    # Prune list to only keep messages within the window timeframe to save memory
-    guild_data = get_guild_data(message.guild.id)
-    window_days = guild_data.get("activity_window_days", 7)
-    cutoff = datetime.now() - timedelta(days=window_days)
-    
-    user_activity[guild_id_str][user_id_str] = [
-        ts for ts in user_activity[guild_id_str][user_id_str] 
-        if datetime.fromisoformat(ts) > cutoff
-    ]
-    
-    # Save the file (assuming you have a save function like this)
-    with open(USER_ACTIVITY_FILE, "w") as f:
-        json.dump(user_activity, f)
-        
-    # Always process commands after on_message
     await bot.process_commands(message)
 
 @bot.event
@@ -751,7 +586,6 @@ async def on_ready():
         print(f"Failed to sync commands: {e}")
         
     load_vote_data()
-    load_user_activity()
     
     for guild_id_str in vote_data.keys():
         refresh_critical_amount(guild_id_str)
@@ -764,9 +598,7 @@ async def on_ready():
         
     if not manage_active_roles_loop.is_running():
         manage_active_roles_loop.start()
-        
-    asyncio.create_task(scan_guild_history_async())
-        
+                
     await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
 
 
@@ -825,7 +657,7 @@ async def info(interaction: discord.Interaction):
     vk_bc = f"<#{vk_bc_id}>" if vk_bc_id else "Not Set"
     
     # Calculate Critical Amount (adjust math below if you use a specific percentage)
-    active_count = get_active_member_count(interaction.guild_id)
+    active_count = get_active_users_count(interaction.guild)
     # Example math: Critical amount is 10% of active members, minimum of 3. Update to match your actual formula!
     critical_amount = max(3, int(active_count * 0.10)) 
     
