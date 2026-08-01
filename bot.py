@@ -40,6 +40,25 @@ active_users_cache = {}
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
 
+critical_amounts = {}
+
+def refresh_critical_amount(guild_id):
+    """Calculates and updates the cached critical vote threshold for a guild."""
+    guild = bot.get_guild(int(guild_id))
+    if not guild:
+        return
+    active_count = get_active_users_count(guild)
+    # Simple majority math for votekick threshold
+    critical_amounts[str(guild_id)] = max(2, (active_count // 2) + 1)
+    last_critical_refresh[str(guild_id)] = datetime.now()
+
+def get_critical_amount(guild_id) -> int:
+    """Returns the cached critical amount."""
+    guild_id_str = str(guild_id)
+    if guild_id_str not in critical_amounts:
+        refresh_critical_amount(guild_id)
+    return critical_amounts.get(guild_id_str, 2)
+
 async def broadcast_error_log(message_content: str):
     """Broadcasts traceback details safely to the bot owner's DMs."""
     try:
@@ -464,26 +483,6 @@ async def discord_backup_loop():
     await run_discord_channel_backup()
 
 @bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name} ({bot.user.id})')
-    print('------')
-    
-    load_vote_data()
-    
-    if not check_expired_votes.is_running():
-        check_expired_votes.start()
-    if not manage_active_roles_loop.is_running():
-        manage_active_roles_loop.start()
-    if not discord_backup_loop.is_running():
-        discord_backup_loop.start()
-        
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} application commands globally.")
-    except Exception as e:
-        print(f"Failed to sync application tree parameters: {e}")
-
-@bot.event
 async def on_guild_join(guild):
     get_guild_data(guild.id)
     print(f"Joined guild: {guild.name} (ID: {guild.id})")
@@ -496,27 +495,28 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
-        
+    print(f'Logged in as {bot.user.name} ({bot.user.id})')
+    print('------')
+    
     load_vote_data()
     
-    for guild_id_str in vote_data.keys():
-        refresh_critical_amount(guild_id_str)
+    # Pre-calculate the critical amount for all connected servers on boot
+    for guild in bot.guilds:
+        refresh_critical_amount(guild.id)
         
     if not check_expired_votes.is_running():
         check_expired_votes.start()
-        
+    if not manage_active_roles_loop.is_running():
+        manage_active_roles_loop.start()
     if not discord_backup_loop.is_running():
         discord_backup_loop.start()
         
-    if not manage_active_roles_loop.is_running():
-        manage_active_roles_loop.start()
-                
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} application commands globally.")
+    except Exception as e:
+        print(f"Failed to sync application tree parameters: {e}")
+        
     await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
 
 @bot.tree.command(name="info", description="Display configuration settings and statistics parameters.")
