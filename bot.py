@@ -21,11 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-<<<<<<< HEAD
 BOT_VERSION = "1.6.3"
-=======
-BOT_VERSION = "1.6.2"
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -38,41 +34,12 @@ cooldowns = {}
 # Vote data: {guild_id: {target_user_id: {voter_id: vote_timestamp}}}
 vote_data = {}
 
-<<<<<<< HEAD
 # Active users cache (populated every 5 mins): {guild_id: {user_id_set}}
-=======
-# Active users cache (populated hourly): {guild_id: {user_id_set}}
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
 active_users_cache = {}
 
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
 
-<<<<<<< HEAD
-=======
-# Cached critical amounts per guild: {guild_id: int}
-critical_amounts = {}
-
-def refresh_critical_amount(guild_id: int):
-    """Calculates and updates the cached critical vote threshold for a guild."""
-    guild = bot.get_guild(guild_id)
-    if not guild:
-        return
-    active_count = get_active_users_count(guild)
-    critical_amounts[guild_id] = max(2, int(active_count * 0.10))
-    last_critical_refresh[guild_id] = datetime.now()
-
-def get_critical_amount(guild_id: int) -> int:
-    """Returns the cached critical amount or recalculates if expired (1 hour)."""
-    now = datetime.now()
-    last_refresh = last_critical_refresh.get(guild_id)
-    
-    if guild_id not in critical_amounts or not last_refresh or now - last_refresh > timedelta(hours=1):
-        refresh_critical_amount(guild_id)
-        
-    return critical_amounts.get(guild_id, 2)
-
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
 async def broadcast_error_log(message_content: str):
     """Broadcasts traceback details safely to the bot owner's DMs."""
     try:
@@ -254,14 +221,8 @@ def get_vote_data(guild_id):
     return vote_data[guild_id_str]
 
 def get_active_users_count(guild: discord.Guild) -> int:
-<<<<<<< HEAD
     """Count active users using the in-memory cache populated by the 5-min scanner."""
     return max(1, len(active_users_cache.get(guild.id, set())))
-=======
-    """Count active users using the hourly cached active users set."""
-    active_count = len(active_users_cache.get(guild.id, set()))
-    return max(1, active_count)
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
 
 def remove_expired_votes():
     affected_users = {}
@@ -428,7 +389,6 @@ async def check_expired_votes():
 
 @tasks.loop(hours=1)
 async def manage_active_roles_loop():
-<<<<<<< HEAD
     """Scans history every 5 mins to compute active members and assign roles based on message threshold."""
     await bot.wait_until_ready()
     try:
@@ -436,17 +396,6 @@ async def manage_active_roles_loop():
             guild_config = get_guild_data(guild.id)
             window_days = guild_config.get("activity_window_days", 7)
             threshold = guild_config.get("activity_window_messages", 1)
-=======
-    """Scans history hourly to compute active members and assign roles based on message threshold."""
-    try:
-        await bot.wait_until_ready()
-        print("🕒 [Role Sync Engine] Commencing hourly historical scan & role evaluation...")
-        
-        for guild in bot.guilds:
-            guild_config = get_guild_data(guild.id)
-            window_days = guild_config.get("activity_window_days", 7)
-            threshold = guild_config.get("activity_message_threshold", 1)
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
             cutoff = datetime.now() - timedelta(days=window_days)
             
             user_message_counts = {}
@@ -459,7 +408,6 @@ async def manage_active_roles_loop():
                     async for message in channel.history(after=cutoff, limit=None):
                         if message.author.bot:
                             continue
-<<<<<<< HEAD
                         uid = message.author.id
                         user_message_counts[uid] = user_message_counts.get(uid, 0) + 1
                 except discord.Forbidden:
@@ -468,15 +416,6 @@ async def manage_active_roles_loop():
                     pass
 
             # Filter out anyone who hasn't hit the required message threshold
-=======
-                        user_id = message.author.id
-                        user_message_counts[user_id] = user_message_counts.get(user_id, 0) + 1
-                except discord.Forbidden:
-                    continue
-                except Exception as channel_err:
-                    print(f"⚠️ [Role Sync Engine] Could not read channel {channel.name}: {channel_err}")
-
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
             active_user_ids = {uid for uid, count in user_message_counts.items() if count >= threshold}
             active_users_cache[guild.id] = active_user_ids
             
@@ -486,11 +425,7 @@ async def manage_active_roles_loop():
                 continue
                 
             role = guild.get_role(role_id)
-<<<<<<< HEAD
             if not role or not guild.me.guild_permissions.manage_roles or guild.me.top_role <= role:
-=======
-            if not role:
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
                 refresh_critical_amount(guild.id)
                 continue
             
@@ -559,7 +494,6 @@ async def on_message(message: discord.Message):
         return
     await bot.process_commands(message)
 
-<<<<<<< HEAD
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -584,9 +518,6 @@ async def on_ready():
         manage_active_roles_loop.start()
                 
     await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
-=======
-# --- APPLICATION SLASH COMMANDS ---
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
 
 @bot.tree.command(name="info", description="Display configuration settings and statistics parameters.")
 async def info(interaction: discord.Interaction):
@@ -626,16 +557,11 @@ async def info(interaction: discord.Interaction):
 
     vk_bc_id = guild_data.get("votekick_broadcast_channel")
     vk_bc = f"<#{vk_bc_id}>" if vk_bc_id else "Not Set"
-<<<<<<< HEAD
     
     # Calculate Critical Amount (adjust math below if you use a specific percentage)
     active_count = get_active_users_count(interaction.guild)
     # Example math: Critical amount is 10% of active members, minimum of 3. Update to match your actual formula!
     critical_amount = max(3, int(active_count * 0.10)) 
-    
-=======
-
->>>>>>> a2f7edd08500482796fc585648497b5ab89cdf19
     act_bc_id = guild_data.get("activity_broadcast_channel")
     act_bc = f"<#{act_bc_id}>" if act_bc_id else "Not Set"
 
