@@ -21,7 +21,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.6.3"
+BOT_VERSION = "1.6.5"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -364,7 +364,13 @@ async def check_expired_votes():
             
             for target_id_str in list(vote_data[guild_id_str].keys()):
                 expired_voters = []
-                for voter_id_str, ts_str in vote_data[guild_id_str][target_id_str].items():
+                for voter_id_str, vote_info in list(vote_data[guild_id_str][target_id_str].items()):
+                    # Handle both the new dict format and legacy string formats safely
+                    if isinstance(vote_info, dict):
+                        ts_str = vote_info.get("timestamp")
+                    else:
+                        ts_str = vote_info
+                        
                     vote_time = datetime.fromisoformat(ts_str)
                     if vote_time < one_day_ago:
                         expired_voters.append(voter_id_str)
@@ -406,7 +412,7 @@ async def check_expired_votes():
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
-@tasks.loop(hours=1)
+@tasks.loop(minutes=5)
 async def manage_active_roles_loop():
     """Scans history every 5 mins to compute active members and assign roles based on message threshold."""
     await bot.wait_until_ready()
@@ -741,9 +747,9 @@ async def list_my_shame(interaction: discord.Interaction):
 
     await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
 
-@bot.tree.command(name="shameboard", description="View the server's hall of shame database hierarchy leaderboard.")
+@bot.tree.command(name="list_all_shame", description="Lists all entries in the hall o' shame.")
 @app_commands.guild_only()
-async def shameboard(interaction: discord.Interaction):
+async def list_all_shame(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "shameboard"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
@@ -795,14 +801,15 @@ async def shameboard(interaction: discord.Interaction):
 
     await interaction.response.send_message("\n".join(response_lines))
 
-@bot.tree.command(name="votekick", description="Initiate a democratic kick election against a problematic member.")
+@bot.tree.command(name="vote", description="Adds a vote to kick a member, which expires after a day.")
+@app_commands.describe(user="The user to vote for", anonymous="Whether your vote is anonymous (default: True)")
 @app_commands.guild_only()
-async def votekick(interaction: discord.Interaction, user: discord.Member):
+async def vote(interaction: discord.Interaction, user: discord.Member, anonymous: bool = True):
     if is_command_disabled(interaction.guild_id, "votekick"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
@@ -816,37 +823,44 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
     if user.bot:
-        await interaction.followup.send("❌ You cannot invoke democracy against artificial synthetic logic instances.")
+        await interaction.followup.send("❌ You cannot vote to kick a bot.")
         return
 
     if user.id == interaction.user.id:
-        await interaction.followup.send("❌ You cannot cast an electoral execution protocol upon yourself.")
+        await interaction.followup.send("❌ You cannot vote to kick yourself.")
         return
 
     if user.guild_permissions.administrator or user.id == interaction.guild.owner_id:
-        await interaction.followup.send("❌ Target member holds sovereign immune administrative clearance privileges.")
+        await interaction.followup.send("❌ You cannot vote to kick the server owner or an administrator.")
+        return
+        
+    if user.top_role >= interaction.guild.me.top_role:
+        await interaction.followup.send("❌ I can't kick that person. Please ask a moderator to move my role higher.")
         return
 
     target_id_str = str(user.id)
     voter_id_str = str(interaction.user.id)
     current_time = datetime.now()
-
     critical_amount = get_critical_amount(interaction.guild_id)
 
     if target_id_str not in guild_vote_data:
         guild_vote_data[target_id_str] = {}
 
-    if voter_id_str in guild_vote_data[target_id_str]:
-        guild_vote_data[target_id_str][voter_id_str] = current_time.isoformat()
-        save_vote_data()
-        current_votes = len(guild_vote_data[target_id_str])
-        await interaction.followup.send(f"🔄 Your active vote tracking timestamp for `{user.name}` has been successfully updated. ({current_votes}/{critical_amount})")
-        return
-
-    guild_vote_data[target_id_str][voter_id_str] = current_time.isoformat()
+    # Save timestamp and anonymity selection
+    guild_vote_data[target_id_str][voter_id_str] = {
+        "timestamp": current_time.isoformat(),
+        "anonymous": anonymous
+    }
     save_vote_data()
 
     current_votes = len(guild_vote_data[target_id_str])
+    await interaction.followup.send(f"✅ Your vote has been counted for {user.name} ({current_votes}/{critical_amount}).")
+    
+    # Broadcast to the channel
+    if anonymous:
+        await interaction.channel.send(f"🟠 Someone voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
+    else:
+        await interaction.channel.send(f"🟠 `{interaction.user.name}` voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
 
     if current_votes >= critical_amount:
         del guild_vote_data[target_id_str]
@@ -855,114 +869,100 @@ async def votekick(interaction: discord.Interaction, user: discord.Member):
         ban_duration_days = guild_data.get("votekick_ban_duration", 7)
         
         try:
-            try:
-                await user.send(f"🚨 You have been democratically exiled from **{interaction.guild.name}** via vote-kick consensus matching for {ban_duration_days} days.")
-            except Exception:
-                pass
-
-            await interaction.guild.ban(user, delete_message_days=0, reason=f"Democratically banned via Votekick threshold matching ({current_votes}/{critical_amount})")
+            if ban_duration_days > 0:
+                await interaction.guild.ban(user, delete_message_days=0, reason=f"Vote to kick - reached critical amount ({current_votes}/{critical_amount})")
+                await interaction.channel.send(f"🚨 **{user.name}** has been banned for {ban_duration_days} days due to reaching the critical vote threshold!", silent=True)
+                
+                # Setup auto-unban
+                async def scheduled_unban_callback():
+                    await asyncio.sleep(ban_duration_days * 86400)
+                    try:
+                        await interaction.guild.unban(discord.Object(id=user.id), reason="Vote-kick ban duration expired.")
+                    except Exception:
+                        pass
+                asyncio.create_task(scheduled_unban_callback())
+            else:
+                await interaction.guild.kick(user, reason=f"Vote to kick - reached critical amount ({current_votes}/{critical_amount})")
+                await interaction.channel.send(f"🚨 **{user.name}** has been kicked due to reaching the critical vote threshold!", silent=True)
             
-            existing_ids = [int(k) for k in guild_data["entries"].keys()]
-            next_id = str(max(existing_ids) + 1) if existing_ids else "1"
-            
-            guild_data["entries"][next_id] = {
-                "user_id": user.id,
-                "username": user.name,
-                "reason": f"Democratically exiled for {ban_duration_days} days via votekick processing.",
-                "date": current_time.isoformat(),
-                "shamed_by": "System Consensus Process"
-            }
-            update_guild_data(interaction.guild_id, guild_data)
-
-            await interaction.followup.send(f"🔨 **Exile Protocol Finalized!** `{user.name}` has accumulated sufficient consensus markers ({current_votes}/{critical_amount}) and has been banned for {ban_duration_days} days.")
-            
-            async def scheduled_unban_callback():
-                await asyncio.sleep(ban_duration_days * 86400)
-                try:
-                    await interaction.guild.unban(discord.Object(id=user.id), reason="Democratic vote-kick ban duration cycle completed.")
-                except Exception:
-                    pass
-            
-            asyncio.create_task(scheduled_unban_callback())
-
         except discord.Forbidden:
-            await interaction.followup.send("❌ **Execution Error:** Bot lacks permission hierarchies required to ban this target.")
-    else:
-        await interaction.followup.send(f"🗳️ **Consensus Registered!** `{interaction.user.name}` voted to kick `{user.name}`. Progress: ({current_votes}/{critical_amount} required matching markers). Votes expire in 24 hours.")
+            action_type = f"banned for {ban_duration_days} days" if ban_duration_days > 0 else "kicked"
+            await interaction.channel.send(f"⚠️ **{user.name}** should have been {action_type}, but I lack the required permissions.", silent=True)
 
-@bot.tree.command(name="config_setup", description="Configure server setup roles and parameters.")
+@bot.tree.command(name="unvote", description="Removes your vote.")
 @app_commands.guild_only()
-async def config_setup(
-    interaction: discord.Interaction, 
-    manager_role: discord.Role = None, 
-    shame_channel: discord.TextChannel = None, 
-    votekick_broadcast_channel: discord.TextChannel = None,
-    activity_broadcast_channel: discord.TextChannel = None,
-    active_member_role: discord.Role = None,
-    expiry_days: int = None,
-    votekick_ban_duration: int = None,
-    activity_window_days: int = None,
-    activity_message_threshold: int = None
-):
-    if is_command_disabled(interaction.guild_id, "config_setup"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+async def unvote(interaction: discord.Interaction):
+    if is_command_disabled(interaction.guild_id, "unvote"):
+        await interaction.response.send_message("❌ This command is disabled.", ephemeral=True)
         return
         
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-
-    if not is_moderator(interaction):
-        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-
-    changes = []
-    if manager_role is not None:
-        guild_data["manager_role"] = manager_role.id
-        changes.append(f"Manager Role -> `@{manager_role.name}`")
-    if shame_channel is not None:
-        guild_data["shame_channel"] = shame_channel.id
-        changes.append(f"Shame Broadcast Channel -> <#{shame_channel.id}>")
-    if votekick_broadcast_channel is not None:
-        guild_data["votekick_broadcast_channel"] = votekick_broadcast_channel.id
-        changes.append(f"Votekick Broadcast Channel -> <#{votekick_broadcast_channel.id}>")
-    if activity_broadcast_channel is not None:
-        guild_data["activity_broadcast_channel"] = activity_broadcast_channel.id
-        changes.append(f"Activity Broadcast Channel -> <#{activity_broadcast_channel.id}>")
-    if active_member_role is not None:
-        guild_data["active_member_role"] = active_member_role.id
-        changes.append(f"Active Member Role -> `@{active_member_role.name}`")
-    if expiry_days is not None:
-        guild_data["expiry_days"] = None if expiry_days <= 0 else expiry_days
-        changes.append(f"Shame Expiry Days -> `{guild_data['expiry_days']}`")
-    if votekick_ban_duration is not None:
-        guild_data["votekick_ban_duration"] = max(1, votekick_ban_duration)
-        changes.append(f"Votekick Ban Duration -> `{guild_data['votekick_ban_duration']} Days`")
-    if activity_window_days is not None:
-        guild_data["activity_window_days"] = max(1, activity_window_days)
-        changes.append(f"Activity Window Days -> `{guild_data['activity_window_days']} Days`")
-    if activity_message_threshold is not None:
-        guild_data["activity_message_threshold"] = max(1, activity_message_threshold)
-        changes.append(f"Activity Message Threshold -> `{guild_data['activity_message_threshold']} Messages`")
-
-    if not changes:
-        await interaction.response.send_message("ℹ️ No modification arguments were passed. System properties intact.", ephemeral=True)
-        return
-
-    update_guild_data(interaction.guild_id, guild_data)
-    refresh_critical_amount(interaction.guild_id)
+    guild_vote_data = get_vote_data(interaction.guild_id)
+    voter_id_str = str(interaction.user.id)
+    vote_removed = False
     
-    await interaction.response.send_message(f"⚙️ **Configuration Properties Updated:**\n" + "\n".join([f"🔹 {c}" for c in changes]))
+    for target_id, voters in list(guild_vote_data.items()):
+        if voter_id_str in voters:
+            del guild_vote_data[target_id][voter_id_str]
+            vote_removed = True
+            if not guild_vote_data[target_id]:
+                del guild_vote_data[target_id]
+                
+    if vote_removed:
+        save_vote_data()
+        await interaction.response.send_message("✅ Your active vote has been successfully removed.", ephemeral=True)
+    else:
+        await interaction.response.send_message("ℹ️ You do not currently have any active votes.", ephemeral=True)
 
-@bot.tree.command(name="config_cooldown", description="Modify the system anti-spam execution throttle timeframe limits.")
+@bot.tree.command(name="votedata", description="Gets information on what kick votes are out there.")
 @app_commands.guild_only()
-async def config_cooldown(interaction: discord.Interaction, seconds: int):
+async def votedata(interaction: discord.Interaction):
+    if is_command_disabled(interaction.guild_id, "votedata"):
+        await interaction.response.send_message("❌ This command is disabled.", ephemeral=True)
+        return
+
+    guild_vote_data = get_vote_data(interaction.guild_id)
+    if not guild_vote_data:
+        await interaction.response.send_message("🕊️ There are currently no active kick votes in this server.")
+        return
+
+    critical_amount = get_critical_amount(interaction.guild_id)
+    lines = [f"🗳️ **Active Vote Data (Critical Amount: {critical_amount}):**\n"]
+    
+    for target_id_str, voters_dict in guild_vote_data.items():
+        member = interaction.guild.get_member(int(target_id_str))
+        name = f"`{member.name}`" if member else f"Unknown User ({target_id_str})"
+        
+        voter_displays = []
+        anon_count = 0
+        
+        for voter_id_str, vote_info in voters_dict.items():
+            is_anon = True
+            if isinstance(vote_info, dict):
+                is_anon = vote_info.get("anonymous", True)
+            
+            if is_anon:
+                anon_count += 1
+            else:
+                voter_member = interaction.guild.get_member(int(voter_id_str))
+                if voter_member:
+                    voter_displays.append(f"`{voter_member.name}`")
+                else:
+                    voter_displays.append(f"Left Server ({voter_id_str})")
+
+        voters_string = ""
+        if voter_displays or anon_count > 0:
+            combined_voters = list(voter_displays)
+            if anon_count > 0:
+                combined_voters.append(f"Anonymous x{anon_count}" if anon_count > 1 else "Anonymous")
+            voters_string = f" (Voted by: {', '.join(combined_voters)})"
+            
+        lines.append(f"• **{name}**: {len(voters_dict)} vote(s){voters_string}")
+        
+    await interaction.response.send_message("\n".join(lines))
+
+@bot.tree.command(name="cooldown", description="Sets the command cooldown.")
+@app_commands.guild_only()
+async def cooldown(interaction: discord.Interaction, seconds: int):
     if is_command_disabled(interaction.guild_id, "config_cooldown"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
@@ -972,7 +972,7 @@ async def config_cooldown(interaction: discord.Interaction, seconds: int):
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
-    if not is_moderator(interaction):
+    if not is_manager(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
 
@@ -989,50 +989,149 @@ async def config_cooldown(interaction: discord.Interaction, seconds: int):
 
     await interaction.response.send_message(f"⏱️ **Cooldown Threshold Synchronized:** Global command throttle adjusted to `{seconds}s` for this guild context.")
 
-@bot.tree.command(name="activity_config_reset", description="Reset configuration elements back to native default fallbacks.")
+# --- MANAGER ROLE SETUP ---
+@bot.tree.command(name="set_manager_role", description="Sets the manager role.")
 @app_commands.guild_only()
-@app_commands.choices(attribute=[
-    app_commands.Choice(name="Active Member Role", value="role"),
-    app_commands.Choice(name="Activity Broadcast Channel", value="channel"),
-    app_commands.Choice(name="Activity Evaluation Window (7 Days)", value="window"),
-    app_commands.Choice(name="Activity Message Threshold (1 Msg)", value="threshold")
-])
-async def activity_config_reset(interaction: discord.Interaction, attribute: str):
-    if is_command_disabled(interaction.guild_id, "activity_config_reset"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
+    if not is_moderator(interaction):
+        await interaction.response.send_message("❌ Only Moderators can use this.", ephemeral=True)
         return
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        return
-
     guild_data = get_guild_data(interaction.guild_id)
-    if attribute == "role":
-        guild_data["active_member_role"] = None
-        display = "Active Member Role"
-    elif attribute == "channel":
-        guild_data["activity_broadcast_channel"] = None
-        display = "Activity Broadcast Channel"
-    elif attribute == "window":
-        guild_data["activity_window_days"] = 7
-        display = "Activity Window (Reset to 7 Days)"
-    elif attribute == "threshold":
-        guild_data["activity_message_threshold"] = 1
-        display = "Activity Message Threshold (Reset to 1 Msg)"
-
+    guild_data["manager_role"] = role.id
     update_guild_data(interaction.guild_id, guild_data)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-    await interaction.response.send_message(f"🔄 **Reset Confirmed**\n`{display}` has been returned to its standard system fallback value state.")
+    await interaction.response.send_message(f"✅ Manager role set to {role.mention}")
 
-@bot.tree.command(name="command_restrict", description="Restrict specific modular slash command usage accessibility flags.")
+@bot.tree.command(name="reset_manager_role", description="Resets the manager role.")
 @app_commands.guild_only()
-async def command_restrict(interaction: discord.Interaction, command: str):
+async def reset_manager_role(interaction: discord.Interaction):
+    if not is_moderator(interaction):
+        await interaction.response.send_message("❌ Only Moderators can use this.", ephemeral=True)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["manager_role"] = None
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("✅ Manager role reset. Only Moderators can manage the bot now.")
+
+# --- SHAME CONFIG ---
+@bot.tree.command(name="shame_config_set", description="Sets the shame channel and shame expiry timer.")
+@app_commands.guild_only()
+async def shame_config_set(interaction: discord.Interaction, channel: discord.TextChannel = None, expiry_days: int = None):
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    if channel: guild_data["shame_channel"] = channel.id
+    if expiry_days is not None: guild_data["expiry_days"] = None if expiry_days <= 0 else expiry_days
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("✅ Shame configuration updated.")
+
+@bot.tree.command(name="shame_config_reset", description="Resets the shame feature configuration.")
+@app_commands.guild_only()
+async def shame_config_reset(interaction: discord.Interaction):
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["shame_channel"] = None
+    guild_data["expiry_days"] = None
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("✅ Shame configuration reset.")
+
+# --- VOTEKICK CONFIG ---
+@bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
+@app_commands.guild_only()
+async def votekick_config_set(interaction: discord.Interaction, broadcast_channel: discord.TextChannel = None, ban_duration: int = None):
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    if broadcast_channel: guild_data["votekick_broadcast_channel"] = broadcast_channel.id
+    if ban_duration is not None: guild_data["votekick_ban_duration"] = max(1, ban_duration)
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("✅ Votekick configuration updated.")
+
+@bot.tree.command(name="votekick_config_reset", description="Resets the votekick feature configuration.")
+@app_commands.guild_only()
+async def votekick_config_reset(interaction: discord.Interaction):
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["votekick_broadcast_channel"] = None
+    guild_data["votekick_ban_duration"] = 7
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("✅ Votekick configuration reset.")
+
+# --- ACTIVITY CONFIG ---
+@bot.tree.command(name="activity_config_set", description="Sets active member role, activity window, threshold, and broadcast channel.")
+@app_commands.guild_only()
+@app_commands.describe(
+    role="The active member role",
+    window_days="Activity window threshold in days",
+    message_threshold="Number of messages required in the window",
+    broadcast_channel="The activity broadcast channel"
+)
+async def activity_config_set(
+    interaction: discord.Interaction, 
+    role: discord.Role = None, 
+    window_days: int = None, 
+    message_threshold: int = None,
+    broadcast_channel: discord.TextChannel = None
+):
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
+        return
+        
+    guild_data = get_guild_data(interaction.guild_id)
+    current_role_id = guild_data.get("active_member_role")
+
+    # ==========================================
+    # SECURITY LOCK: Privilege Escalation Checks
+    # ==========================================
+    if role is not None and role.id != current_role_id:
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ **Security Lock:** You must natively possess the 'Manage Roles' permission to configure a new active role.", ephemeral=True)
+            return
+        if not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ **Security Lock:** I do not have the 'Manage Roles' permission required to assign this role.", ephemeral=True)
+            return
+        if interaction.user.id != interaction.guild.owner_id and interaction.user.top_role <= role:
+            await interaction.response.send_message("❌ **Security Lock:** Your highest role must be strictly above the role you are trying to configure.", ephemeral=True)
+            return
+        if interaction.guild.me.top_role <= role:
+            await interaction.response.send_message("❌ **Security Lock:** My highest role must be strictly above the role you are trying to configure.", ephemeral=True)
+            return
+        if role.permissions.value != 0:
+            await interaction.response.send_message("❌ **Security Lock:** The target role must have absolutely NO server-level permissions.", ephemeral=True)
+            return
+    # ==========================================
+
+    if role: guild_data["active_member_role"] = role.id
+    if window_days is not None: guild_data["activity_window_days"] = max(1, window_days)
+    if message_threshold is not None: guild_data["activity_message_threshold"] = max(1, message_threshold)
+    if broadcast_channel: guild_data["activity_broadcast_channel"] = broadcast_channel.id
+    
+    update_guild_data(interaction.guild_id, guild_data)
+    bot.loop.create_task(manage_active_roles_loop()) # Trigger instant sync
+    await interaction.response.send_message("✅ Activity configuration updated.", ephemeral=True)
+
+@bot.tree.command(name="activity_config_reset", description="Resets the activity feature configuration.")
+@app_commands.guild_only()
+async def activity_config_reset(interaction: discord.Interaction):
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["active_member_role"] = None
+    guild_data["activity_window_days"] = 7
+    guild_data["activity_message_threshold"] = 1
+    guild_data["activity_broadcast_channel"] = None
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("✅ Activity configuration reset.")
+
+@bot.tree.command(name="disable", description="Disables a command, stopping people in your server from using it.")
+@app_commands.guild_only()
+async def disable(interaction: discord.Interaction, command: str):
     if is_command_disabled(interaction.guild_id, "command_restrict"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
@@ -1071,9 +1170,9 @@ async def command_restrict(interaction: discord.Interaction, command: str):
 
     await interaction.response.send_message(f"🔒 **Access Restriction Imposed:** `/{command}` has been completely disabled for standard members within this guild.")
 
-@bot.tree.command(name="command_unrestrict", description="Restore standard access configurations to a restricted slash command tool.")
+@bot.tree.command(name="enable", description="Enables a command, allowing people in your server to use it.")
 @app_commands.guild_only()
-async def command_unrestrict(interaction: discord.Interaction, command: str):
+async def enable(interaction: discord.Interaction, command: str):
     if is_command_disabled(interaction.guild_id, "command_unrestrict"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
