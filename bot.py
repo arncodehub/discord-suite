@@ -4,9 +4,10 @@ from discord import app_commands
 import os
 from dotenv import load_dotenv
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
+import re
 
 # Load environment variables
 load_dotenv()
@@ -21,12 +22,27 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.6.5"
+BOT_VERSION = "1.7.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
 DATA_FILE = "shame_data.json"
 VOTE_DATA_FILE = "vote_data.json"
+
+# -----------------------------
+# Wordle Auto Role Constants
+# -----------------------------
+WORDLE_GUILD_ID = 1367634363474251957
+
+WORDLE_CHANNEL_ID = 1436390213466198137
+WORDLE_COMMAND_CHANNEL_ID = 1437902486328447067
+
+WORDLE_BOT_ID = 1211781489931452447
+
+WORDLE_PRO_ROLE_ID = 1508990442736324730
+WORDLE_FAILURE_ROLE_ID = 1503904966539219064
+
+WORDLE_SCAN_DAYS = 7
 
 # Cooldown tracking: {guild_id: {user_id: timestamp}}
 cooldowns = {}
@@ -41,6 +57,19 @@ active_users_cache = {}
 last_critical_refresh = {}
 
 critical_amounts = {}
+
+# Wordle groups
+wordle_group = app_commands.Group(
+    name="wordle",
+    description="Wordle commands."
+)
+
+
+wordle_autorole_group = app_commands.Group(
+    name="autorole",
+    description="Manage automatic Wordle roles.",
+    parent=wordle_group
+)
 
 def refresh_critical_amount(guild_id):
     """Calculates and updates the cached critical vote threshold for a guild."""
@@ -198,6 +227,7 @@ def get_guild_data(guild_id):
             "entries": {},
             "disabled_commands": [],
             "activity_message_threshold": 1,
+            "wordle_autorole_enabled": False,
         }
         save_shame_data(data)
     return data[guild_id_str]
@@ -330,6 +360,345 @@ def is_manager(interaction: discord.Interaction) -> bool:
 def is_moderator(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_guild
 
+MENTION_REGEX = re.compile(r"<@!?(\d+)>")
+DISPLAY_REGEX = re.compile(r"@([^\n<>]+)")
+
+def parse_wordle_result_line(line: str):
+    """
+    Returns
+
+    (
+        mentioned_user_ids,
+        display_names
+    )
+    """
+
+    ids = [int(x) for x in MENTION_REGEX.findall(line)]
+
+    displays = [
+        x.strip()
+        for x in DISPLAY_REGEX.findall(line)
+        if "<@" not in x
+    ]
+
+    return ids, displays
+
+def resolve_display_name(display_name: str, guild: discord.Guild):
+    """
+    Returns
+
+    None
+        no member found
+
+    discord.Member
+        unique match
+
+    "duplicate"
+        duplicate display names
+    """
+
+    matches = [
+        m
+        for m in guild.members
+        if m.display_name == display_name
+    ]
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        return "duplicate"
+
+    return None
+
+def parse_wordle_message(message: discord.Message, guild: discord.Guild):
+    """
+    Returns
+
+    (
+        failures,
+        pros,
+        duplicate_found
+    )
+    """
+
+    failures = set()
+    pros = set()
+
+    duplicate_found = False
+
+    content = message.content
+
+    if not content.startswith("**Your group is on a"):
+        return failures, pros, duplicate_found
+
+    for raw_line in content.splitlines():
+
+        line = raw_line.strip()
+
+        if line.startswith("👑"):
+
+            ids, displays = parse_wordle_result_line(line)
+
+            pros.update(ids)
+
+            for display in displays:
+
+                result = resolve_display_name(display, guild)
+
+                if result == "duplicate":
+                    duplicate_found = True
+
+                elif result is not None:
+                    pros.add(result.id)
+
+        elif line.startswith("X/6"):
+
+            ids, displays = parse_wordle_result_line(line)
+
+            failures.update(ids)
+
+            for display in displays:
+
+                result = resolve_display_name(display, guild)
+
+                if result == "duplicate":
+                    duplicate_found = True
+
+                elif result is not None:
+                    failures.add(result.id)
+
+    return failures, pros, duplicate_found
+
+async def collect_wordle_results(guild: discord.Guild):
+    """
+    Returns
+
+    (
+        failures,
+        pros,
+        duplicate_found
+    )
+    """
+
+    failures = set()
+    pros = set()
+
+    duplicate_found = False
+
+    channel = guild.get_channel(WORDLE_CHANNEL_ID)
+
+    if channel is None:
+        return failures, pros, duplicate_found
+
+    permissions = channel.permissions_for(guild.me)
+
+    if not permissions.read_messages:
+        return failures, pros, duplicate_found
+
+    if not permissions.read_message_history:
+        return failures, pros, duplicate_found
+    
+    cutoff = datetime.now(timezone.utc) - timedelta(days=WORDLE_SCAN_DAYS)
+
+    try:
+
+        async for message in channel.history(after=cutoff, limit=None):
+
+            if message.author.id != WORDLE_BOT_ID:
+                continue
+
+            f, p, dup = parse_wordle_message(message, guild)
+
+            failures.update(f)
+            pros.update(p)
+
+            if dup:
+                duplicate_found = True
+
+    except discord.Forbidden:
+        pass
+
+    pros -= failures
+
+    return failures, pros, duplicate_found
+
+async def synchronize_wordle_roles(guild: discord.Guild):
+    """
+    Synchronizes Wordle roles.
+
+    Returns
+
+    duplicate_found
+    """
+
+    failure_role = guild.get_role(WORDLE_FAILURE_ROLE_ID)
+    pro_role = guild.get_role(WORDLE_PRO_ROLE_ID)
+
+    log_channel = guild.get_channel(WORDLE_COMMAND_CHANNEL_ID)
+
+    if failure_role is None or pro_role is None:
+        return False
+
+    me = guild.me
+
+    if me is None:
+        return False
+
+    if not me.guild_permissions.manage_roles:
+        return False
+
+    if me.top_role <= failure_role:
+        return False
+
+    if me.top_role <= pro_role:
+        return False
+
+    failures, pros, duplicate_found = await collect_wordle_results(guild)
+
+    for member in guild.members:
+
+        if member.bot:
+            continue
+
+        should_have_failure = member.id in failures
+        should_have_pro = member.id in pros
+
+        has_failure = failure_role in member.roles
+        has_pro = pro_role in member.roles
+
+        try:
+
+            if should_have_failure:
+
+                if not has_failure:
+                    await member.add_roles(
+                        failure_role,
+                        reason="Wordle auto role"
+                    )
+
+                    if log_channel:
+                        await log_channel.send(
+                            f"😭 `{member.name}` is now a `{failure_role.name}`.",
+                            silent=True
+                        )
+
+                if has_pro:
+                    await member.remove_roles(
+                        pro_role,
+                        reason="Wordle auto role"
+                    )
+
+                    if log_channel:
+                        await log_channel.send(
+                            f"🛠️ `{member.name}` is no longer a `{pro_role.name}`.",
+                            silent=True
+                        )
+
+            elif should_have_pro:
+
+                if not has_pro:
+                    await member.add_roles(
+                        pro_role,
+                        reason="Wordle auto role"
+                    )
+
+                    if log_channel:
+                        await log_channel.send(
+                            f"👑 `{member.name}` is now a `{pro_role.name}`.",
+                            silent=True
+                        )
+
+                if has_failure:
+                    await member.remove_roles(
+                        failure_role,
+                        reason="Wordle auto role"
+                    )
+
+                    if log_channel:
+                        await log_channel.send(
+                            f"🛠️ `{member.name}` is no longer a `{failure_role.name}`.",
+                            silent=True
+                        )
+
+            else:
+
+                if has_failure:
+                    await member.remove_roles(
+                        failure_role,
+                        reason="Wordle auto role"
+                    )
+
+                    if log_channel:
+                        await log_channel.send(
+                            f"🛠️ `{member.name}` is no longer a `{failure_role.name}`.",
+                            silent=True
+                        )
+
+                if has_pro:
+                    await member.remove_roles(
+                        pro_role,
+                        reason="Wordle auto role"
+                    )
+
+                    if log_channel:
+                        await log_channel.send(
+                            f"🛠️ `{member.name}` is no longer a `{pro_role.name}`.",
+                            silent=True
+                        )
+
+        except discord.Forbidden:
+            pass
+
+    if duplicate_found and log_channel:
+
+        duplicate_warning = (
+            "⚠️ Duplicate display names found in rare ping fail case, "
+            "some users may miss out on some roles."
+        )
+
+        last_message = None
+
+        async for msg in log_channel.history(limit=10):
+
+            if msg.author.id == guild.me.id:
+
+                last_message = msg
+                break
+
+
+        if last_message and last_message.content.endswith(duplicate_warning):
+
+            match = re.match(
+                r"\[x(\d+)\] (.+)",
+                last_message.content
+            )
+
+            if match:
+
+                count = int(match.group(1)) + 1
+
+            else:
+
+                count = 2
+
+
+            await last_message.edit(
+                content=f"[x{count}] {duplicate_warning}"
+            )
+
+        else:
+
+            await log_channel.send(
+                duplicate_warning,
+                silent=True
+            )
+
+    return duplicate_found
+
+def is_wordle_command_channel(interaction: discord.Interaction):
+    return interaction.channel_id == WORDLE_COMMAND_CHANNEL_ID
+
 def set_cooldown(guild_id, user_id, seconds):
     if guild_id not in cooldowns:
         cooldowns[guild_id] = {}
@@ -412,8 +781,7 @@ async def check_expired_votes():
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
-@tasks.loop(minutes=5)
-async def manage_active_roles_loop():
+async def synchronize_active_member_roles():
     """Scans history every 5 mins to compute active members and assign roles based on message threshold."""
     await bot.wait_until_ready()
     try:
@@ -421,7 +789,7 @@ async def manage_active_roles_loop():
             guild_config = get_guild_data(guild.id)
             window_days = guild_config.get("activity_window_days", 7)
             threshold = guild_config.get("activity_window_messages", 1)
-            cutoff = datetime.now() - timedelta(days=window_days)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
             
             user_message_counts = {}
             
@@ -467,7 +835,7 @@ async def manage_active_roles_loop():
                     if should_have and not has_role:
                         await member.add_roles(role, reason=f"Met active threshold ({threshold} msgs).")
                         if broadcast_channel:
-                            await broadcast_channel.send(f"🎉 `{member.name}` has been assigned the `{role.name}` role due to meeting the activity threshold!", silent=True)
+                            await broadcast_channel.send(f"📈 `{member.name}` has been assigned the `{role.name}` role due to meeting the activity threshold!", silent=True)
                     elif not should_have and has_role:
                         await member.remove_roles(role, reason="User fell below the activity threshold parameters.")
                         if broadcast_channel:
@@ -484,9 +852,51 @@ async def manage_active_roles_loop():
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         await broadcast_error_log(f"🚨 **Background Task Loop Failure (`manage_active_roles_loop`):**\n```python\n{tb}\n```")
 
+@tasks.loop(minutes=5)
+async def manage_active_roles_loop():
+    await synchronize_active_member_roles()
+
 @tasks.loop(hours=24)
 async def discord_backup_loop():
     await run_discord_channel_backup()
+
+@tasks.loop(minutes=30)
+async def wordle_autorole_loop():
+    try:
+
+        guild = bot.get_guild(WORDLE_GUILD_ID)
+
+        if guild is None:
+            return
+
+        guild_data = get_guild_data(guild.id)
+
+        if not guild_data.get("wordle_autorole_enabled", False):
+            return
+
+        await synchronize_wordle_roles(guild)
+
+    except Exception as e:
+
+        print(f"Error in Wordle auto role loop: {e}")
+
+        tb = "".join(
+            traceback.format_exception(
+                type(e),
+                e,
+                e.__traceback__
+            )
+        )
+
+        await broadcast_error_log(
+            f"🚨 **Background Task Failure (`wordle_autorole_loop`)**\n"
+            f"```python\n{tb}\n```"
+        )
+
+@wordle_autorole_loop.before_loop
+async def before_wordle_autorole_loop():
+
+    await bot.wait_until_ready()
 
 @bot.event
 async def on_guild_join(guild):
@@ -516,7 +926,12 @@ async def on_ready():
         manage_active_roles_loop.start()
     if not discord_backup_loop.is_running():
         discord_backup_loop.start()
-        
+
+    if not wordle_autorole_loop.is_running():
+        wordle_autorole_loop.start()
+
+    bot.tree.add_command(wordle_group)
+
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} application commands globally.")
@@ -1112,7 +1527,7 @@ async def activity_config_set(
     if broadcast_channel: guild_data["activity_broadcast_channel"] = broadcast_channel.id
     
     update_guild_data(interaction.guild_id, guild_data)
-    bot.loop.create_task(manage_active_roles_loop()) # Trigger instant sync
+    await synchronize_active_member_roles() # Trigger instant sync
     await interaction.response.send_message("✅ Activity configuration updated.", ephemeral=True)
 
 @bot.tree.command(name="activity_config_reset", description="Resets the activity feature configuration.")
@@ -1206,6 +1621,122 @@ async def enable(interaction: discord.Interaction, command: str):
     update_guild_data(interaction.guild_id, guild_data)
 
     await interaction.response.send_message(f"🔓 **Access Restriction Lifted:** `/{command}` is now available for registration and use by normal endpoints again.")
+
+@wordle_autorole_group.command(
+    name="on",
+    description="Enable automatic Wordle roles."
+)
+async def wordle_autorole_on(
+    interaction: discord.Interaction
+):
+
+    if not is_moderator(interaction):
+
+        await interaction.response.send_message(
+            "❌ You do not have permission to use this command.",
+            ephemeral=True
+        )
+        return
+
+
+    if not is_wordle_command_channel(interaction):
+
+        await interaction.response.send_message(
+            "❌ This command can only be used in <#1437902486328447067>.",
+            ephemeral=True
+        )
+        return
+
+
+    guild_data = get_guild_data(interaction.guild.id)
+
+    guild_data["wordle_autorole_enabled"] = True
+
+    save_shame_data()
+
+
+    await interaction.response.send_message(
+        "✅ Wordle auto role scanning is now ON."
+    )
+
+@wordle_autorole_group.command(
+    name="off",
+    description="Disable automatic Wordle roles."
+)
+async def wordle_autorole_off(
+    interaction: discord.Interaction
+):
+
+    if not is_moderator(interaction):
+
+        await interaction.response.send_message(
+            "❌ You do not have permission to use this command.",
+            ephemeral=True
+        )
+        return
+
+
+    if not is_wordle_command_channel(interaction):
+
+        await interaction.response.send_message(
+            "❌ This command can only be used in <#1437902486328447067>.",
+            ephemeral=True
+        )
+        return
+
+
+    guild_data = get_guild_data(interaction.guild.id)
+
+    guild_data["wordle_autorole_enabled"] = False
+
+    save_shame_data(guild_data)
+
+    await interaction.response.send_message(
+        "✅ Wordle auto role scanning is now OFF."
+    )
+
+@wordle_autorole_group.command(
+    name="scan",
+    description="Immediately scan recent Wordle results."
+)
+async def wordle_autorole_scan(
+    interaction: discord.Interaction
+):
+
+    if not is_moderator(interaction):
+
+        await interaction.response.send_message(
+            "❌ You do not have permission to use this command.",
+            ephemeral=True
+        )
+        return
+
+
+    if not is_wordle_command_channel(interaction):
+
+        await interaction.response.send_message(
+            "❌ This command can only be used in <#1437902486328447067>.",
+            ephemeral=True
+        )
+        return
+
+
+    await interaction.response.defer(
+        ephemeral=True
+    )
+
+
+    await synchronize_wordle_roles(
+        interaction.guild
+    )
+
+
+    await interaction.followup.send(
+        "🔎 #general was scanned and Wordle roles have been automatically updated.",
+        ephemeral=True
+    )    
+
+
 
 if __name__ == "__main__":
     if TOKEN:
