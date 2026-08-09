@@ -22,7 +22,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.7.0"
+BOT_VERSION = "1.7.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -52,6 +52,9 @@ vote_data = {}
 
 # Active users cache (populated every 5 mins): {guild_id: {user_id_set}}
 active_users_cache = {}
+
+# Pending developer DM logs awaiting a successful send
+pending_dev_dm_logs = []
 
 # Last critical amount refresh time per guild: {guild_id: datetime}
 last_critical_refresh = {}
@@ -88,18 +91,96 @@ def get_critical_amount(guild_id) -> int:
         refresh_critical_amount(guild_id)
     return critical_amounts.get(guild_id_str, 2)
 
+def is_transient_network_error(error: Exception) -> bool:
+    """Returns True for errors that may resolve on a later retry."""
+    if isinstance(error, (asyncio.TimeoutError, OSError)):
+        return True
+
+    if isinstance(error, discord.HTTPException):
+        return error.status in {429, 500, 502, 503, 504}
+
+    return False
+
+
+@tasks.loop(minutes=5)
+async def retry_pending_dev_dm_logs():
+    """Retries developer DM logs that failed due to transient network errors."""
+    if not pending_dev_dm_logs or not bot.is_ready():
+        return
+
+    try:
+        owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
+
+        if not owner:
+            return
+
+        while pending_dev_dm_logs:
+            chunk = pending_dev_dm_logs[0]
+
+            try:
+                await owner.send(chunk, silent=True)
+                pending_dev_dm_logs.pop(0)
+
+            except Exception as e:
+                if is_transient_network_error(e):
+                    print(f"⏳ Developer DM retry failed; will retry later: {e}")
+                    return
+
+                print(f"❌ Dropping developer DM after permanent failure: {e}")
+                pending_dev_dm_logs.pop(0)
+
+    except Exception as e:
+        if is_transient_network_error(e):
+            print(f"⏳ Developer DM retry connection failed: {e}")
+        else:
+            print(f"❌ Developer DM retry failed: {e}")
+
+
+@retry_pending_dev_dm_logs.before_loop
+async def before_retry_pending_dev_dm_logs():
+    await bot.wait_until_ready()
+
 async def broadcast_error_log(message_content: str):
-    """Broadcasts traceback details safely to the bot owner's DMs."""
+    """Safely sends logs to the bot owner's DMs, retrying transient failures."""
+    chunks = [
+        message_content[i:i + 1900]
+        for i in range(0, len(message_content), 1900)
+    ]
+
+    if not chunks:
+        return
+
     try:
         if not bot.is_ready():
+            pending_dev_dm_logs.extend(chunks)
             return
+
         owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
-        if owner:
-            for i in range(0, len(message_content), 1900):
-                chunk = message_content[i:i+1900]
+
+        if not owner:
+            print("❌ Failed to find bot owner for developer DM.")
+            return
+
+        for index, chunk in enumerate(chunks):
+            try:
                 await owner.send(chunk, silent=True)
-    except Exception as dev_err:
-        print(f"Failed to transmit error logs to Discord owner DM: {dev_err}")
+            except Exception as e:
+                if is_transient_network_error(e):
+                    pending_dev_dm_logs.extend(chunks[index:])
+                    print(
+                        f"📥 Developer DM queued for retry after transient "
+                        f"network error: {e}"
+                    )
+                else:
+                    print(f"❌ Failed to transmit developer DM: {e}")
+                return
+
+    except Exception as e:
+        if is_transient_network_error(e):
+            pending_dev_dm_logs.extend(chunks)
+            print(f"📥 Developer DM queued for retry: {e}")
+        else:
+            print(f"❌ Failed to transmit developer DM: {e}")
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -782,77 +863,176 @@ async def check_expired_votes():
         await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
 async def synchronize_active_member_roles():
-    """Scans history every 5 mins to compute active members and assign roles based on message threshold."""
+    """Scans history and safely synchronizes Active Member roles."""
     await bot.wait_until_ready()
+
     try:
         for guild in bot.guilds:
             guild_config = get_guild_data(guild.id)
             window_days = guild_config.get("activity_window_days", 7)
             threshold = guild_config.get("activity_window_messages", 1)
             cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-            
+
             user_message_counts = {}
-            
+
+            # Phase 1: completely scan history before touching any roles.
             for channel in guild.text_channels:
                 perms = channel.permissions_for(guild.me)
+
                 if not perms.read_messages or not perms.read_message_history:
                     continue
+
                 try:
                     async for message in channel.history(after=cutoff, limit=None):
                         if message.author.bot:
                             continue
+
                         uid = message.author.id
-                        user_message_counts[uid] = user_message_counts.get(uid, 0) + 1
+                        user_message_counts[uid] = (
+                            user_message_counts.get(uid, 0) + 1
+                        )
+
                 except discord.Forbidden:
                     continue
-                except Exception:
-                    pass
 
-            # Filter out anyone who hasn't hit the required message threshold
-            active_user_ids = {uid for uid, count in user_message_counts.items() if count >= threshold}
+                except Exception as e:
+                    # A failed history scan means our desired-state calculation
+                    # is incomplete. Abort before making ANY role changes.
+                    print(
+                        f"🛑 Aborting Active Member synchronization for "
+                        f"{guild.name}: failed to scan #{channel.name}: {e}"
+                    )
+                    return
+
+            # Phase 2: construct the complete desired state.
+            active_user_ids = {
+                uid
+                for uid, count in user_message_counts.items()
+                if count >= threshold
+            }
+
             active_users_cache[guild.id] = active_user_ids
-            
+
             role_id = guild_config.get("active_member_role")
+
             if not role_id:
                 refresh_critical_amount(guild.id)
                 continue
-                
+
             role = guild.get_role(role_id)
-            if not role or not guild.me.guild_permissions.manage_roles or guild.me.top_role <= role:
+
+            if (
+                not role
+                or not guild.me.guild_permissions.manage_roles
+                or guild.me.top_role <= role
+            ):
                 refresh_critical_amount(guild.id)
                 continue
-            
-            broadcast_channel_id = guild_config.get("activity_broadcast_channel")
-            broadcast_channel = guild.get_channel(broadcast_channel_id) if broadcast_channel_id else None
-            
+
+            broadcast_channel_id = guild_config.get(
+                "activity_broadcast_channel"
+            )
+            broadcast_channel = (
+                guild.get_channel(broadcast_channel_id)
+                if broadcast_channel_id
+                else None
+            )
+
+            # Phase 3: compare desired state against current state and
+            # perform ONLY necessary role edits.
             for member in guild.members:
                 if member.bot:
                     continue
+
                 should_have = member.id in active_user_ids
                 has_role = role in member.roles
-                
-                try:
-                    if should_have and not has_role:
-                        await member.add_roles(role, reason=f"Met active threshold ({threshold} msgs).")
-                        if broadcast_channel:
-                            await broadcast_channel.send(f"📈 `{member.name}` has been assigned the `{role.name}` role due to meeting the activity threshold!", silent=True)
-                    elif not should_have and has_role:
-                        await member.remove_roles(role, reason="User fell below the activity threshold parameters.")
-                        if broadcast_channel:
-                            await broadcast_channel.send(f"📉 `{member.name}` lost the `{role.name}` role due to inactivity.", silent=True)
-                except discord.Forbidden:
-                    pass
-                except Exception as e:
-                    print(f"Failed to synchronize role updates for {member.name}: {e}")
-                    
-            refresh_critical_amount(guild.id)
-            
-    except Exception as e:
-        print(f"Error in manage_active_roles_loop task frame: {e}")
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"🚨 **Background Task Loop Failure (`manage_active_roles_loop`):**\n```python\n{tb}\n```")
 
-@tasks.loop(minutes=5)
+                if should_have and not has_role:
+                    try:
+                        await member.add_roles(
+                            role,
+                            reason=f"Met active threshold ({threshold} msgs)."
+                        )
+
+                    except Exception as e:
+                        # Abort immediately. Do not continue issuing role
+                        # requests after a failed role operation.
+                        print(
+                            f"🛑 Aborting Active Member synchronization for "
+                            f"{guild.name}: failed to add role to "
+                            f"{member.name}: {e}"
+                        )
+                        return
+
+                    if broadcast_channel:
+                        try:
+                            await broadcast_channel.send(
+                                f"📈 `{member.name}` has been assigned "
+                                f"the `{role.name}` role due to meeting "
+                                f"the activity threshold!",
+                                silent=True
+                            )
+                        except Exception as e:
+                            print(
+                                f"⚠️ Failed to send Active Member "
+                                f"notification for {member.name}: {e}"
+                            )
+
+                elif not should_have and has_role:
+                    try:
+                        await member.remove_roles(
+                            role,
+                            reason=(
+                                "User fell below the activity "
+                                "threshold parameters."
+                            )
+                        )
+
+                    except Exception as e:
+                        # Abort immediately. Do not continue issuing role
+                        # requests after a failed role operation.
+                        print(
+                            f"🛑 Aborting Active Member synchronization for "
+                            f"{guild.name}: failed to remove role from "
+                            f"{member.name}: {e}"
+                        )
+                        return
+
+                    if broadcast_channel:
+                        try:
+                            await broadcast_channel.send(
+                                f"📉 `{member.name}` lost the "
+                                f"`{role.name}` role due to inactivity.",
+                                silent=True
+                            )
+                        except Exception as e:
+                            print(
+                                f"⚠️ Failed to send Active Member "
+                                f"notification for {member.name}: {e}"
+                            )
+
+            refresh_critical_amount(guild.id)
+
+    except Exception as e:
+        print(
+            f"Error in manage_active_roles_loop task frame: {e}"
+        )
+
+        tb = "".join(
+            traceback.format_exception(
+                type(e),
+                e,
+                e.__traceback__
+            )
+        )
+
+        await broadcast_error_log(
+            f"🚨 **Background Task Loop Failure "
+            f"(`manage_active_roles_loop`):**\n"
+            f"```python\n{tb}\n```"
+        )
+
+@tasks.loop(minutes=10)
 async def manage_active_roles_loop():
     await synchronize_active_member_roles()
 
@@ -922,8 +1102,13 @@ async def on_ready():
         
     if not check_expired_votes.is_running():
         check_expired_votes.start()
+
     if not manage_active_roles_loop.is_running():
         manage_active_roles_loop.start()
+
+    if not retry_pending_dev_dm_logs.is_running():
+        retry_pending_dev_dm_logs.start()
+        
     if not discord_backup_loop.is_running():
         discord_backup_loop.start()
 
@@ -1011,7 +1196,7 @@ async def info(interaction: discord.Interaction):
         f"Vote to Kick Ban Duration: {votekick_ban_duration}\n"
         f"Vote to Kick Broadcast Channel: {vk_bc}\n"
         f"Active Members (Last {act_win} Days): {active_members}\n"
-        f"Required Votes (10% threshold): {critical_amount}\n\n"
+        f"Required Votes: {critical_amount}\n\n"
         "**Activity Stuff**\n"
         f"Active Member Role: {am_role_text}\n"
         f"Activity Requirement Window: {act_win} Days\n"
