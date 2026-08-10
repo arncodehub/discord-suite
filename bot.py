@@ -22,7 +22,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.7.1"
+BOT_VERSION = "1.7.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1712,8 +1712,17 @@ async def activity_config_set(
     if broadcast_channel: guild_data["activity_broadcast_channel"] = broadcast_channel.id
     
     update_guild_data(interaction.guild_id, guild_data)
-    await synchronize_active_member_roles() # Trigger instant sync
-    await interaction.response.send_message("✅ Activity configuration updated.", ephemeral=True)
+
+    # Acknowledge the interaction before starting the potentially
+    # long-running Active Member synchronization.
+    await interaction.response.defer(ephemeral=True)
+
+    await synchronize_active_member_roles()  # Trigger instant sync
+
+    await interaction.followup.send(
+        "✅ Activity configuration updated.",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="activity_config_reset", description="Resets the activity feature configuration.")
 @app_commands.guild_only()
