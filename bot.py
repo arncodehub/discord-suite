@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.7.2"
+BOT_VERSION = "1.8.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -61,6 +61,12 @@ pending_dev_dm_logs = []
 last_critical_refresh = {}
 
 critical_amounts = {}
+
+# Unvote tracking: {guild_id: datetime} - tracks last unvote time per guild
+last_unvote_time = {}
+
+# Track if initial message history sync has completed
+initial_sync_completed = False
 
 # --- New Globals for Rate Limiting ---
 RATE_LIMIT_FILE = "rate_limit.json"
@@ -908,6 +914,7 @@ async def check_expired_votes():
 
 async def synchronize_active_member_roles():
     """Scans history and safely synchronizes Active Member roles."""
+    global initial_sync_completed
     await bot.wait_until_ready()
 
     try:
@@ -1075,6 +1082,9 @@ async def synchronize_active_member_roles():
             f"(`manage_active_roles_loop`):**\n"
             f"```python\n{tb}\n```"
         )
+    
+    # Mark initial sync as completed
+    initial_sync_completed = True
 
 @bot.tree.interaction_check
 async def global_interaction_check(interaction: discord.Interaction) -> bool:
@@ -1504,6 +1514,24 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
         
     await interaction.response.defer(ephemeral=True)
 
+    # Check if initial message history sync has completed
+    if not initial_sync_completed:
+        await interaction.followup.send("⏳ I am still reading messages, try again later.")
+        return
+
+    # Check if an unvote occurred in the last 60 seconds
+    if interaction.guild_id in last_unvote_time:
+        time_since_unvote = (datetime.now() - last_unvote_time[interaction.guild_id]).total_seconds()
+        if time_since_unvote < 60:
+            unblock_time = last_unvote_time[interaction.guild_id] + timedelta(seconds=60)
+            unblock_timestamp = int(unblock_time.timestamp())
+            await interaction.followup.send(
+                f"You need to slow down, try voting again <t:{unblock_timestamp}:R>. "
+                f"This is all the fault of <@1137904269664718948> for spamming "
+                f"[here](https://discord.com/channels/1501359553823117412/1512195844978507909/1538335972121645076) by the way."
+            )
+            return
+
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
@@ -1612,6 +1640,10 @@ async def unvote(interaction: discord.Interaction):
                 
     if vote_removed:
         save_vote_data()
+        
+        # Track unvote time
+        last_unvote_time[interaction.guild_id] = datetime.now()
+        
         await interaction.response.send_message("✅ Your active vote has been successfully removed.", ephemeral=True)
         
         # --- Broadcast Engine ---
