@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
 import re
-import sys
 
 # Load environment variables
 load_dotenv()
@@ -80,41 +79,6 @@ wordle_autorole_group = app_commands.Group(
     description="Manage automatic Wordle roles.",
     parent=wordle_group
 )
-
-def initialize_rate_limits():
-    """Loads and strictly validates the rate limits configuration."""
-    global rate_limits_config
-    
-    # Create file if it doesn't exist
-    if not os.path.exists(RATE_LIMIT_FILE):
-        with open(RATE_LIMIT_FILE, 'w') as f:
-            json.dump({}, f, indent=4)
-        print(f"Created {RATE_LIMIT_FILE} with default empty configuration.")
-        return
-
-    # Load file
-    with open(RATE_LIMIT_FILE, 'r') as f:
-        try:
-            rate_limits_config = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"CRITICAL ERROR: Failed to parse {RATE_LIMIT_FILE}. Invalid JSON format.\n{e}")
-            sys.exit(1)  # Halt program
-
-    # Validate schema
-    for cmd, config in rate_limits_config.items():
-        if not isinstance(config, dict):
-            print(f"CRITICAL ERROR: Config for '{cmd}' must be a JSON object.")
-            sys.exit(1)
-        
-        prev_cmd = config.get("previousCommand")
-        seconds = config.get("seconds")
-        
-        if not isinstance(prev_cmd, str):
-            print(f"CRITICAL ERROR: Rate limit for '{cmd}' requires 'previousCommand' to be a string.")
-            sys.exit(1)
-        if not isinstance(seconds, int) or seconds <= 0:
-            print(f"CRITICAL ERROR: Rate limit for '{cmd}' requires 'seconds' to be a whole number > 0.")
-            sys.exit(1)
 
 def refresh_critical_amount(guild_id):
     """Calculates and updates the cached critical vote threshold for a guild."""
@@ -1581,7 +1545,6 @@ async def unvote(interaction: discord.Interaction):
             if not guild_vote_data[target_id]:
                 del guild_vote_data[target_id]
             break
-            break
                 
     if vote_removed:
         save_vote_data()
@@ -1612,6 +1575,8 @@ async def unvote(interaction: discord.Interaction):
         if broadcast_channel and target_name:
             critical_amount = get_critical_amount(interaction.guild_id)
             await broadcast_channel.send(f"🔵 `{interaction.user.name}` removed their vote for `{target_name}` ({remaining_votes}/{critical_amount}).", silent=True)
+    else:
+        await interaction.response.send_message("ℹ️ You do not currently have any active votes.", ephemeral=True)
     else:
         await interaction.response.send_message("ℹ️ You do not currently have any active votes.", ephemeral=True)
 
@@ -2032,8 +1997,7 @@ async def wordle_autorole_scan(
         ephemeral=True
     )    
 
-# Initialize this immediately
-initialize_rate_limits()
+
 
 if __name__ == "__main__":
     if TOKEN:
