@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
 import re
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -61,6 +62,14 @@ last_critical_refresh = {}
 
 critical_amounts = {}
 
+# --- New Globals for Rate Limiting ---
+RATE_LIMIT_FILE = "rate_limit.json"
+rate_limits_config = {}
+
+# Tracks timestamps to enforce cross-command rate limits
+# Format: {guild_id: {user_id: {command_name: datetime_object}}}
+command_timestamps = {}
+
 # Wordle groups
 wordle_group = app_commands.Group(
     name="wordle",
@@ -73,6 +82,41 @@ wordle_autorole_group = app_commands.Group(
     description="Manage automatic Wordle roles.",
     parent=wordle_group
 )
+
+def initialize_rate_limits():
+    """Loads and strictly validates the rate limits configuration."""
+    global rate_limits_config
+    
+    # Create file if it doesn't exist
+    if not os.path.exists(RATE_LIMIT_FILE):
+        with open(RATE_LIMIT_FILE, 'w') as f:
+            json.dump({}, f, indent=4)
+        print(f"Created {RATE_LIMIT_FILE} with default empty configuration.")
+        return
+
+    # Load file
+    with open(RATE_LIMIT_FILE, 'r') as f:
+        try:
+            rate_limits_config = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"CRITICAL ERROR: Failed to parse {RATE_LIMIT_FILE}. Invalid JSON format.\n{e}")
+            sys.exit(1)  # Halt program
+
+    # Validate schema
+    for cmd, config in rate_limits_config.items():
+        if not isinstance(config, dict):
+            print(f"CRITICAL ERROR: Config for '{cmd}' must be a JSON object.")
+            sys.exit(1)
+        
+        prev_cmd = config.get("previousCommand")
+        seconds = config.get("seconds")
+        
+        if not isinstance(prev_cmd, str):
+            print(f"CRITICAL ERROR: Rate limit for '{cmd}' requires 'previousCommand' to be a string.")
+            sys.exit(1)
+        if not isinstance(seconds, int) or seconds <= 0:
+            print(f"CRITICAL ERROR: Rate limit for '{cmd}' requires 'seconds' to be a whole number > 0.")
+            sys.exit(1)
 
 def refresh_critical_amount(guild_id):
     """Calculates and updates the cached critical vote threshold for a guild."""
@@ -1032,6 +1076,55 @@ async def synchronize_active_member_roles():
             f"```python\n{tb}\n```"
         )
 
+@bot.tree.interaction_check
+async def global_interaction_check(interaction: discord.Interaction) -> bool:
+    # 1. Existing DM validation logic
+    if interaction.guild is None and interaction.command and interaction.command.name != "info":
+        await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
+        return False
+
+    # 2. Dynamic Rate Limiting Engine
+    if interaction.guild and interaction.command:
+        guild_id = interaction.guild_id
+        user_id = interaction.user.id
+        cmd_name = interaction.command.name
+
+        # Check if the triggered command has a configured rate limit
+        if cmd_name in rate_limits_config:
+            rule = rate_limits_config[cmd_name]
+            prev_cmd = rule["previousCommand"]
+            req_sec = rule["seconds"]
+            error_msg = rule.get("errorMessage")
+
+            # Did this user run the required previous command in this server?
+            if guild_id in command_timestamps and user_id in command_timestamps[guild_id]:
+                last_prev_cmd_time = command_timestamps[guild_id][user_id].get(prev_cmd)
+                
+                if last_prev_cmd_time:
+                    elapsed = (datetime.now() - last_prev_cmd_time).total_seconds()
+                    
+                    # Cut them off if they are moving too fast
+                    if elapsed < req_sec:
+                        remaining = req_sec - elapsed
+                        ready_time = int((datetime.now() + timedelta(seconds=remaining)).timestamp())
+                        
+                        response_text = f"Sorry, try again <t:{ready_time}:R>."
+                        if error_msg:
+                            response_text += f"\nNOTE: {error_msg}"
+                            
+                        await interaction.response.send_message(response_text, ephemeral=True)
+                        return False 
+        
+        # 3. Log the successful command execution timestamp
+        if guild_id not in command_timestamps:
+            command_timestamps[guild_id] = {}
+        if user_id not in command_timestamps[guild_id]:
+            command_timestamps[guild_id][user_id] = {}
+            
+        command_timestamps[guild_id][user_id][cmd_name] = datetime.now()
+
+    return True
+
 @tasks.loop(minutes=10)
 async def manage_active_roles_loop():
     await synchronize_active_member_roles()
@@ -1500,16 +1593,51 @@ async def unvote(interaction: discord.Interaction):
     voter_id_str = str(interaction.user.id)
     vote_removed = False
     
+    target_user_id = None
+    is_anon = True
+    
     for target_id, voters in list(guild_vote_data.items()):
         if voter_id_str in voters:
+            # Capture vote properties before deleting
+            if isinstance(voters[voter_id_str], dict):
+                is_anon = voters[voter_id_str].get("anonymous", True)
+                
             del guild_vote_data[target_id][voter_id_str]
             vote_removed = True
+            target_user_id = target_id
+            
             if not guild_vote_data[target_id]:
                 del guild_vote_data[target_id]
+            break
                 
     if vote_removed:
         save_vote_data()
         await interaction.response.send_message("✅ Your active vote has been successfully removed.", ephemeral=True)
+        
+        # --- Broadcast Engine ---
+        guild_data = get_guild_data(interaction.guild_id)
+        vk_bc_id = guild_data.get("votekick_broadcast_channel")
+        
+        broadcast_channel = None
+        if vk_bc_id:
+            custom_channel = interaction.guild.get_channel(vk_bc_id)
+            if custom_channel and custom_channel.permissions_for(interaction.guild.me).send_messages:
+                broadcast_channel = custom_channel
+        
+        # Fallback to the channel where interaction happened if no designated channel exists
+        if not broadcast_channel:
+            broadcast_channel = interaction.channel
+            
+        if broadcast_channel and broadcast_channel.permissions_for(interaction.guild.me).send_messages:
+            target_member = interaction.guild.get_member(int(target_user_id))
+            target_name = f"`{target_member.name}`" if target_member else f"Unknown ({target_user_id})"
+            current_votes = len(guild_vote_data.get(target_user_id, {}))
+            critical_amount = get_critical_amount(interaction.guild_id)
+            
+            if is_anon:
+                await broadcast_channel.send(f"⚪ Someone withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
+            else:
+                await broadcast_channel.send(f"⚪ `{interaction.user.name}` withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
     else:
         await interaction.response.send_message("ℹ️ You do not currently have any active votes.", ephemeral=True)
 
@@ -1930,7 +2058,8 @@ async def wordle_autorole_scan(
         ephemeral=True
     )    
 
-
+# Initialize this immediately
+initialize_rate_limits()
 
 if __name__ == "__main__":
     if TOKEN:
