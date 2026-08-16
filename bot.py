@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.8.0"
+BOT_VERSION = "1.8.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -62,13 +62,11 @@ last_critical_refresh = {}
 
 critical_amounts = {}
 
-# --- New Globals for Rate Limiting ---
-RATE_LIMIT_FILE = "rate_limit.json"
-rate_limits_config = {}
+# Unvote tracking: {guild_id: datetime} - tracks last unvote time per guild
+last_unvote_time = {}
 
-# Tracks timestamps to enforce cross-command rate limits
-# Format: {guild_id: {user_id: {command_name: datetime_object}}}
-command_timestamps = {}
+# Track if initial message history sync has completed
+initial_sync_completed = False
 
 # Wordle groups
 wordle_group = app_commands.Group(
@@ -908,6 +906,7 @@ async def check_expired_votes():
 
 async def synchronize_active_member_roles():
     """Scans history and safely synchronizes Active Member roles."""
+    global initial_sync_completed
     await bot.wait_until_ready()
 
     try:
@@ -1075,55 +1074,9 @@ async def synchronize_active_member_roles():
             f"(`manage_active_roles_loop`):**\n"
             f"```python\n{tb}\n```"
         )
-
-@bot.tree.interaction_check
-async def global_interaction_check(interaction: discord.Interaction) -> bool:
-    # 1. Existing DM validation logic
-    if interaction.guild is None and interaction.command and interaction.command.name != "info":
-        await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
-        return False
-
-    # 2. Dynamic Rate Limiting Engine
-    if interaction.guild and interaction.command:
-        guild_id = interaction.guild_id
-        user_id = interaction.user.id
-        cmd_name = interaction.command.name
-
-        # Check if the triggered command has a configured rate limit
-        if cmd_name in rate_limits_config:
-            rule = rate_limits_config[cmd_name]
-            prev_cmd = rule["previousCommand"]
-            req_sec = rule["seconds"]
-            error_msg = rule.get("errorMessage")
-
-            # Did this user run the required previous command in this server?
-            if guild_id in command_timestamps and user_id in command_timestamps[guild_id]:
-                last_prev_cmd_time = command_timestamps[guild_id][user_id].get(prev_cmd)
-                
-                if last_prev_cmd_time:
-                    elapsed = (datetime.now() - last_prev_cmd_time).total_seconds()
-                    
-                    # Cut them off if they are moving too fast
-                    if elapsed < req_sec:
-                        remaining = req_sec - elapsed
-                        ready_time = int((datetime.now() + timedelta(seconds=remaining)).timestamp())
-                        
-                        response_text = f"Sorry, try again <t:{ready_time}:R>."
-                        if error_msg:
-                            response_text += f"\nNOTE: {error_msg}"
-                            
-                        await interaction.response.send_message(response_text, ephemeral=True)
-                        return False 
-        
-        # 3. Log the successful command execution timestamp
-        if guild_id not in command_timestamps:
-            command_timestamps[guild_id] = {}
-        if user_id not in command_timestamps[guild_id]:
-            command_timestamps[guild_id][user_id] = {}
-            
-        command_timestamps[guild_id][user_id][cmd_name] = datetime.now()
-
-    return True
+    
+    # Mark initial sync as completed
+    initial_sync_completed = True
 
 @tasks.loop(minutes=10)
 async def manage_active_roles_loop():
@@ -1504,6 +1457,24 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
         
     await interaction.response.defer(ephemeral=True)
 
+    # Check if initial message history sync has completed
+    if not initial_sync_completed:
+        await interaction.followup.send("⏳ I am still reading messages, try again later.")
+        return
+
+    # Check if an unvote occurred in the last 60 seconds
+    if interaction.guild_id in last_unvote_time:
+        time_since_unvote = (datetime.now() - last_unvote_time[interaction.guild_id]).total_seconds()
+        if time_since_unvote < 60:
+            unblock_time = last_unvote_time[interaction.guild_id] + timedelta(seconds=60)
+            unblock_timestamp = int(unblock_time.timestamp())
+            await interaction.followup.send(
+                f"You need to slow down, try voting again <t:{unblock_timestamp}:R>. "
+                f"This is all the fault of <@1137904269664718948> for spamming "
+                f"[here](https://discord.com/channels/1501359553823117412/1512195844978507909/1538335972121645076) by the way."
+            )
+            return
+
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
@@ -1590,54 +1561,57 @@ async def unvote(interaction: discord.Interaction):
         return
         
     guild_vote_data = get_vote_data(interaction.guild_id)
+    guild_data = get_guild_data(interaction.guild_id)
     voter_id_str = str(interaction.user.id)
     vote_removed = False
-    
-    target_user_id = None
-    is_anon = True
+    target_name = None
+    remaining_votes = 0
     
     for target_id, voters in list(guild_vote_data.items()):
         if voter_id_str in voters:
-            # Capture vote properties before deleting
-            if isinstance(voters[voter_id_str], dict):
-                is_anon = voters[voter_id_str].get("anonymous", True)
-                
+            # Get target member info before deletion
+            target_member = interaction.guild.get_member(int(target_id))
+            if target_member:
+                target_name = target_member.name
+            
             del guild_vote_data[target_id][voter_id_str]
             vote_removed = True
-            target_user_id = target_id
+            remaining_votes = len(guild_vote_data[target_id])
             
             if not guild_vote_data[target_id]:
                 del guild_vote_data[target_id]
             break
+            break
                 
     if vote_removed:
         save_vote_data()
+        
+        # Track unvote time
+        last_unvote_time[interaction.guild_id] = datetime.now()
+        
         await interaction.response.send_message("✅ Your active vote has been successfully removed.", ephemeral=True)
         
-        # --- Broadcast Engine ---
-        guild_data = get_guild_data(interaction.guild_id)
+        # Broadcast to votekick broadcast channel
         vk_bc_id = guild_data.get("votekick_broadcast_channel")
-        
         broadcast_channel = None
+        
         if vk_bc_id:
             custom_channel = interaction.guild.get_channel(vk_bc_id)
             if custom_channel and custom_channel.permissions_for(interaction.guild.me).send_messages:
                 broadcast_channel = custom_channel
         
-        # Fallback to the channel where interaction happened if no designated channel exists
+        if not broadcast_channel and interaction.guild.system_channel and interaction.guild.system_channel.permissions_for(interaction.guild.me).send_messages:
+            broadcast_channel = interaction.guild.system_channel
+            
         if not broadcast_channel:
-            broadcast_channel = interaction.channel
-            
-        if broadcast_channel and broadcast_channel.permissions_for(interaction.guild.me).send_messages:
-            target_member = interaction.guild.get_member(int(target_user_id))
-            target_name = f"`{target_member.name}`" if target_member else f"Unknown ({target_user_id})"
-            current_votes = len(guild_vote_data.get(target_user_id, {}))
+            for channel in interaction.guild.text_channels:
+                if channel.permissions_for(interaction.guild.me).send_messages:
+                    broadcast_channel = channel
+                    break
+        
+        if broadcast_channel and target_name:
             critical_amount = get_critical_amount(interaction.guild_id)
-            
-            if is_anon:
-                await broadcast_channel.send(f"⚪ Someone withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
-            else:
-                await broadcast_channel.send(f"⚪ `{interaction.user.name}` withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
+            await broadcast_channel.send(f"🔵 `{interaction.user.name}` removed their vote for `{target_name}` ({remaining_votes}/{critical_amount}).", silent=True)
     else:
         await interaction.response.send_message("ℹ️ You do not currently have any active votes.", ephemeral=True)
 
