@@ -1514,11 +1514,6 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
         
     await interaction.response.defer(ephemeral=True)
 
-    # Check if initial message history sync has completed
-    if not initial_sync_completed:
-        await interaction.followup.send("⏳ I am still reading messages, try again later.")
-        return
-
     # Check if an unvote occurred in the last 60 seconds
     if interaction.guild_id in last_unvote_time:
         time_since_unvote = (datetime.now() - last_unvote_time[interaction.guild_id]).total_seconds()
