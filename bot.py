@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.8.3"
+BOT_VERSION = "1.8.4"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1559,6 +1559,17 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     current_time = datetime.now()
     critical_amount = get_critical_amount(interaction.guild_id)
 
+    # Check if user already has a vote cast
+    for target_id, voters in guild_vote_data.items():
+        if voter_id_str in voters:
+            if target_id == target_id_str:
+                await interaction.followup.send(f"❌ You have already casted a vote for {user.name}.")
+            else:
+                target_member = interaction.guild.get_member(int(target_id))
+                target_name = target_member.name if target_member else f"Unknown ({target_id})"
+                await interaction.followup.send(f"❌ You have already casted a vote for {target_name}. Please remove your vote and recast it.")
+            return
+
     if target_id_str not in guild_vote_data:
         guild_vote_data[target_id_str] = {}
 
@@ -1655,7 +1666,7 @@ async def unvote(interaction: discord.Interaction):
         if not broadcast_channel:
             broadcast_channel = interaction.channel
             
-        if broadcast_channel and broadcast_channel.permissions_for(interaction.guild.me).send_messages:
+        if broadcast_channel and broadcast_channel.permissions_for(interaction.guild.me).send_messages and target_user_id:
             target_member = interaction.guild.get_member(int(target_user_id))
             target_name = f"`{target_member.name}`" if target_member else f"Unknown ({target_user_id})"
             current_votes = len(guild_vote_data.get(target_user_id, {}))
@@ -1666,7 +1677,7 @@ async def unvote(interaction: discord.Interaction):
             else:
                 await broadcast_channel.send(f"⚪ `{interaction.user.name}` withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
     else:
-        await interaction.response.send_message("ℹ️ You do not currently have any active votes.", ephemeral=True)
+        await interaction.response.send_message("ℹ️ You do not have any current casted votes.", ephemeral=True)
 
 @bot.tree.command(name="votedata", description="Gets information on what kick votes are out there.")
 @app_commands.guild_only()
