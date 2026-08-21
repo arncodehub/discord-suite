@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.8.4"
+BOT_VERSION = "1.9.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -353,13 +353,17 @@ def get_guild_data(guild_id):
             "manager_role": None,
             "shame_channel": None,
             "cooldown": 0,
-            "expiry_days": None,
             "votekick_ban_duration": 7,
             "entries": {},
             "disabled_commands": [],
             "activity_message_threshold": 1,
             "wordle_autorole_enabled": False,
+            "next_entry_id": 1,  # For persistent IDs
         }
+        save_shame_data(data)
+    # Ensure next_entry_id exists for backward compatibility
+    if "next_entry_id" not in data[guild_id_str]:
+        data[guild_id_str]["next_entry_id"] = 1
         save_shame_data(data)
     return data[guild_id_str]
 
@@ -470,6 +474,306 @@ def remove_expired_entries(guild_data):
 def is_command_disabled(guild_id, command_name):
     guild_data = get_guild_data(guild_id)
     return command_name in guild_data.get("disabled_commands", [])
+
+# ===== SHAME SYSTEM HELPER FUNCTIONS (v1.9.0) =====
+
+def get_next_entry_id(guild_id) -> int:
+    """Gets and increments the next entry ID for persistent IDs."""
+    guild_data = get_guild_data(guild_id)
+    next_id = guild_data.get("next_entry_id", 1)
+    guild_data["next_entry_id"] = next_id + 1
+    update_guild_data(guild_id, guild_data)
+    return next_id
+
+def check_expired_entries(guild_id) -> list:
+    """
+    Removes expired entries and returns list of expired entry info for broadcasting.
+    Format: [{"id": id, "user_id": user_id, "username": username, "type": type, "reason": reason, "date": date}, ...]
+    """
+    guild_data = get_guild_data(guild_id)
+    current_time = datetime.now()
+    expired_entries = []
+    entries_to_remove = []
+    
+    for entry_id, entry in list(guild_data["entries"].items()):
+        entry_type = entry.get("type", "shame")
+        entry_date = datetime.fromisoformat(entry["date"])
+        
+        # Shame expires after 7 days, Credit after 21 days
+        expiry_days = 7 if entry_type == "shame" else 21
+        expiry_date = entry_date + timedelta(days=expiry_days)
+        
+        if current_time > expiry_date:
+            expired_entries.append({
+                "id": entry_id,
+                "user_id": entry["user_id"],
+                "username": entry["username"],
+                "type": entry_type,
+                "reason": entry.get("reason", "No reason provided"),
+                "date": entry["date"]
+            })
+            entries_to_remove.append(entry_id)
+    
+    for entry_id in entries_to_remove:
+        del guild_data["entries"][entry_id]
+    
+    if expired_entries:
+        update_guild_data(guild_id, guild_data)
+    
+    return expired_entries
+
+def get_member_display_name(member) -> str:
+    """Get server nickname or username."""
+    if member is None:
+        return "Unknown User"
+    return member.display_name or member.name
+
+def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
+    """
+    Builds hall display messages (may be multiple if needed).
+    Returns list of message strings.
+    """
+    guild_data = get_guild_data(guild_id)
+    
+    if not guild_data["entries"]:
+        return ["🕊️ Both halls are currently empty."]
+    
+    # Separate entries by type
+    shame_entries = {}
+    credit_entries = {}
+    
+    for entry_id, entry in guild_data["entries"].items():
+        entry_type = entry.get("type", "shame")
+        user_id = entry["user_id"]
+        
+        if entry_type == "shame":
+            if user_id not in shame_entries:
+                shame_entries[user_id] = []
+            shame_entries[user_id].append((entry_id, entry))
+        else:  # credit
+            if user_id not in credit_entries:
+                credit_entries[user_id] = []
+            credit_entries[user_id].append((entry_id, entry))
+    
+    # Sort users by count (descending), then by most recent entry
+    def sort_user_entries(entries_dict):
+        sorted_users = []
+        for user_id, entries_list in entries_dict.items():
+            # Sort entries by date (most recent first)
+            entries_list.sort(key=lambda x: datetime.fromisoformat(x[1]["date"]), reverse=True)
+            most_recent_date = datetime.fromisoformat(entries_list[0][1]["date"])
+            sorted_users.append((user_id, entries_list, most_recent_date))
+        
+        # Sort by count (desc), then by most recent date (desc)
+        sorted_users.sort(key=lambda x: (-len(x[1]), -x[2].timestamp()))
+        return sorted_users
+    
+    shame_sorted = sort_user_entries(shame_entries)
+    credit_sorted = sort_user_entries(credit_entries)
+    
+    # Build messages
+    messages = []
+    shame_emoji = "<:shame:1536070204419866707>"
+    credit_emoji = "<:credit:1536076540889010188>"
+    
+    # Build shame hall
+    if shame_sorted:
+        shame_lines = [f"**Hall of Shame**"]
+        shame_lines.append("__Username - Count__")
+        
+        for user_id, entries_list, _ in shame_sorted:
+            member = guild.get_member(user_id)
+            display_name = get_member_display_name(member)
+            count = len(entries_list)
+            
+            shame_lines.append(f"")
+            shame_lines.append(f"`{display_name}` - **{count}**")
+            
+            for entry_id, entry in entries_list:
+                entry_date = datetime.fromisoformat(entry["date"])
+                expiry_date = entry_date + timedelta(days=7)
+                expiry_timestamp = int(expiry_date.timestamp())
+                reason = entry.get("reason", "No reason provided")
+                
+                shame_lines.append(f"{shame_emoji} {reason} (expires <t:{expiry_timestamp}:R>)")
+        
+        messages.append("\n".join(shame_lines))
+    
+    # Build credit hall
+    if credit_sorted:
+        credit_lines = [f"**Hall of Credit**"]
+        credit_lines.append("__Username - Count__")
+        
+        for user_id, entries_list, _ in credit_sorted:
+            member = guild.get_member(user_id)
+            display_name = get_member_display_name(member)
+            count = len(entries_list)
+            
+            credit_lines.append(f"")
+            credit_lines.append(f"`{display_name}` - **{count}**")
+            
+            for entry_id, entry in entries_list:
+                entry_date = datetime.fromisoformat(entry["date"])
+                expiry_date = entry_date + timedelta(days=21)
+                expiry_timestamp = int(expiry_date.timestamp())
+                reason = entry.get("reason", "No reason provided")
+                
+                credit_lines.append(f"{credit_emoji} {reason} (expires <t:{expiry_timestamp}:R>)")
+        
+        messages.append("\n".join(credit_lines))
+    
+    return messages
+
+async def broadcast_hall_to_channel(channel: discord.TextChannel, messages: list):
+    """Broadcasts hall messages to a channel."""
+    if not channel or not channel.permissions_for(channel.guild.me).send_messages:
+        return False
+    
+    try:
+        for msg in messages:
+            if msg:
+                await channel.send(msg)
+        return True
+    except discord.Forbidden:
+        return False
+
+async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int, user: discord.Member, entry_type: str, reason: str, date_str: str):
+    """Broadcasts CREATE message."""
+    guild_data = get_guild_data(interaction.guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    
+    type_name = "Shame" if entry_type == "shame" else "Credit"
+    
+    broadcast_msg = (
+        f"@{user.display_name} nominated @{user.display_name} for the Hall of {type_name}!!\n"
+        f"Reason: {reason}\n"
+        f"Date: {date_str}\n"
+        f"ID: {entry_id}"
+    )
+    
+    if shame_channel_id:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
+            try:
+                await channel.send(broadcast_msg)
+                return True
+            except discord.Forbidden:
+                pass
+    
+    return False
+
+async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int, entry: dict):
+    """Broadcasts DELETE message."""
+    guild_data = get_guild_data(interaction.guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    
+    entry_type = entry.get("type", "shame")
+    type_name = "shame" if entry_type == "shame" else "credit"
+    username = entry.get("username", "Unknown")
+    reason = entry.get("reason", "No reason provided")
+    date_str = entry.get("date", "Unknown date")
+    
+    broadcast_msg = (
+        f"@{interaction.user.display_name} deleted {type_name} entry #{entry_id} which was for @{username}\n"
+        f"Reason: {reason}\n"
+        f"Date: {date_str}"
+    )
+    
+    if shame_channel_id:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
+            try:
+                await channel.send(broadcast_msg)
+                return True
+            except discord.Forbidden:
+                pass
+    
+    return False
+
+async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, old_entry: dict, new_entry: dict):
+    """Broadcasts EDIT message."""
+    guild_data = get_guild_data(interaction.guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    
+    changes = []
+    unchanged = []
+    
+    # Check for changes
+    for key in ["user_id", "type", "reason", "date"]:
+        old_val = old_entry.get(key)
+        new_val = new_entry.get(key)
+        
+        if old_val != new_val:
+            display_key = key.replace("_", " ").title()
+            if key == "type":
+                old_display = "Shame" if old_val == "shame" else "Credit"
+                new_display = "Shame" if new_val == "shame" else "Credit"
+            elif key == "user_id":
+                display_key = "User"
+                old_display = old_entry.get("username", "Unknown")
+                new_display = new_entry.get("username", "Unknown")
+            else:
+                old_display = str(old_val)
+                new_display = str(new_val)
+            
+            changes.append(f"{display_key}: {old_display} -> {new_display}")
+        else:
+            unchanged.append(key)
+    
+    if not changes:
+        return False
+    
+    unchanged_str = ", ".join([k.replace("_", " ").title() for k in unchanged if k != "user_id"])
+    
+    broadcast_msg = f"@{interaction.user.display_name} changed entry #{entry_id}\n"
+    broadcast_msg += "\n".join(changes)
+    if unchanged_str:
+        broadcast_msg += f"\nUnchanged: {unchanged_str}"
+    
+    if shame_channel_id:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
+            try:
+                await channel.send(broadcast_msg)
+                return True
+            except discord.Forbidden:
+                pass
+    
+    return False
+
+async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: int, entry: dict):
+    """Broadcasts EXPIRE message and then full hall."""
+    guild_data = get_guild_data(guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    
+    entry_type = entry.get("type", "shame")
+    type_name = "Shame" if entry_type == "shame" else "Credit"
+    username = entry.get("username", "Unknown")
+    reason = entry.get("reason", "No reason provided")
+    date_str = entry.get("date", "Unknown date")
+    
+    expire_msg = (
+        f"A {type_name.lower()} entry for @{username} has expired!\n"
+        f"Reason: {reason}\n"
+        f"Date: {date_str}\n"
+        f"ID: {entry_id}"
+    )
+    
+    if shame_channel_id:
+        channel = guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(guild.me).send_messages:
+            try:
+                await channel.send(expire_msg)
+                # Send updated hall display
+                hall_messages = build_hall_display(guild, guild_id)
+                await broadcast_hall_to_channel(channel, hall_messages)
+                return True
+            except discord.Forbidden:
+                pass
+    
+    return False
+
+# ===== END SHAME SYSTEM HELPER FUNCTIONS =====
 
 def get_all_command_names():
     return sorted([cmd.name for cmd in bot.tree.get_commands() if not isinstance(cmd, discord.app_commands.ContextMenu)])
@@ -912,6 +1216,28 @@ async def check_expired_votes():
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
+@tasks.loop(minutes=5)
+async def check_shame_credit_expiry():
+    """Checks for expired shame/credit entries and broadcasts expiry messages."""
+    try:
+        for guild in bot.guilds:
+            expired_entries = check_expired_entries(guild.id)
+            
+            for entry_info in expired_entries:
+                try:
+                    await broadcast_entry_expire(guild, guild.id, entry_info["id"], entry_info)
+                except Exception as e:
+                    print(f"Error broadcasting expiry for entry {entry_info['id']}: {e}")
+                    
+    except Exception as e:
+        print(f"Error in check_shame_credit_expiry background loop: {e}")
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        await broadcast_error_log(f"🚨 **Background Loop Failure (`check_shame_credit_expiry`):**\n```python\n{tb}\n```")
+
+@check_shame_credit_expiry.before_loop
+async def before_check_shame_credit_expiry():
+    await bot.wait_until_ready()
+
 async def synchronize_active_member_roles():
     """Scans history and safely synchronizes Active Member roles."""
     global initial_sync_completed
@@ -1309,13 +1635,25 @@ async def info(interaction: discord.Interaction):
 
     await interaction.response.send_message(response_text)
 
-@bot.tree.command(name="shame", description="Add an entry to the hall of shame")
+@bot.tree.command(name="create_entry", description="Create a Hall of Shame/Credit entry")
+@app_commands.describe(
+    user="The user to nominate",
+    type="Type: shame or credit",
+    reason="Reason for the nomination",
+    date="Optional date (format: YYYY-MM-DD, assumed 12PM Pacific)"
+)
 @app_commands.guild_only()
-async def shame(interaction: discord.Interaction, user: discord.Member, reason: str):
-    if is_command_disabled(interaction.guild_id, "shame"):
+async def create_entry(
+    interaction: discord.Interaction, 
+    user: discord.Member, 
+    type: str,
+    reason: str,
+    date: str = None
+):
+    if is_command_disabled(interaction.guild_id, "create_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
-        
+    
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
@@ -1326,7 +1664,13 @@ async def shame(interaction: discord.Interaction, user: discord.Member, reason: 
         return
 
     if user.bot:
-        await interaction.response.send_message("❌ You cannot shame a bot.", ephemeral=True)
+        await interaction.response.send_message("❌ You cannot nominate a bot.", ephemeral=True)
+        return
+    
+    # Validate type
+    entry_type = type.lower()
+    if entry_type not in ["shame", "credit"]:
+        await interaction.response.send_message("❌ Type must be 'shame' or 'credit'.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -1334,43 +1678,58 @@ async def shame(interaction: discord.Interaction, user: discord.Member, reason: 
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    remove_expired_entries(guild_data)
-
-    existing_ids = [int(k) for k in guild_data["entries"].keys()]
-    next_id = str(max(existing_ids) + 1) if existing_ids else "1"
-
-    guild_data["entries"][next_id] = {
+    # Parse date if provided
+    if date:
+        try:
+            parsed_date = datetime.strptime(date, "%Y-%m-%d")
+            # Set to 12 PM Pacific
+            parsed_date = parsed_date.replace(hour=12, minute=0, second=0)
+            entry_date_str = parsed_date.isoformat()
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid date format. Use YYYY-MM-DD.", ephemeral=True)
+            return
+    else:
+        # Default to current time, 12 PM Pacific
+        now = datetime.now()
+        entry_date_str = now.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
+    
+    # Get next persistent ID
+    entry_id = get_next_entry_id(interaction.guild_id)
+    
+    # Create entry
+    guild_data["entries"][str(entry_id)] = {
         "user_id": user.id,
         "username": user.name,
+        "type": entry_type,
         "reason": reason,
-        "date": datetime.now().isoformat(),
-        "shamed_by": interaction.user.name
+        "date": entry_date_str,
+        "created_by": interaction.user.id
     }
     update_guild_data(interaction.guild_id, guild_data)
-
-    response_lines = [
-        f"🚨 **{user.name}** has been added to the hall of shame!",
-        f"**Reason:** {reason}",
-        f"**Entry ID:** {next_id}"
-    ]
-
+    
+    # Broadcast
+    await broadcast_entry_create(interaction, entry_id, user, entry_type, reason, entry_date_str)
+    
+    # Send hall display
+    hall_messages = build_hall_display(interaction.guild, interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
     if shame_channel_id:
-        shame_channel = interaction.guild.get_channel(shame_channel_id)
-        if shame_channel and shame_channel.permissions_for(interaction.guild.me).send_messages:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
             try:
-                await shame_channel.send("\n".join(response_lines))
-                await interaction.response.send_message(f"✅ Successfully shamed {user.name} and logged into the broadcast channel.", ephemeral=True)
-                return
+                for msg in hall_messages:
+                    if msg:
+                        await channel.send(msg)
             except discord.Forbidden:
                 pass
+    
+    await interaction.response.send_message(f"✅ Created entry #{entry_id}", ephemeral=True)
 
-    await interaction.response.send_message("\n".join(response_lines))
-
-@bot.tree.command(name="unshame", description="Remove an entry from the hall of shame")
+@bot.tree.command(name="delete_entry", description="Delete a Hall of Shame/Credit entry by ID")
+@app_commands.describe(id="Entry ID to delete")
 @app_commands.guild_only()
-async def unshame(interaction: discord.Interaction, entry_id: int, reason: str = None):
-    if is_command_disabled(interaction.guild_id, "unshame"):
+async def delete_entry(interaction: discord.Interaction, id: int):
+    if is_command_disabled(interaction.guild_id, "delete_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
@@ -1388,7 +1747,7 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    entry_id_str = str(entry_id)
+    entry_id_str = str(id)
     if entry_id_str not in guild_data["entries"]:
         await interaction.response.send_message("❌ Entry ID not found.", ephemeral=True)
         return
@@ -1396,113 +1755,123 @@ async def unshame(interaction: discord.Interaction, entry_id: int, reason: str =
     entry = guild_data["entries"][entry_id_str]
     del guild_data["entries"][entry_id_str]
     update_guild_data(interaction.guild_id, guild_data)
+    
+    # Broadcast delete message
+    await broadcast_entry_delete(interaction, id, entry)
+    
+    # Send updated hall display
+    hall_messages = build_hall_display(interaction.guild, interaction.guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    if shame_channel_id:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
+            try:
+                for msg in hall_messages:
+                    if msg:
+                        await channel.send(msg)
+            except discord.Forbidden:
+                pass
 
-    response_lines = [
-        f"✅ **{entry['username']}** has been removed from the hall of shame",
-        f"**Original Reason:** {entry['reason']}"
-    ]
+    await interaction.response.send_message(f"✅ Deleted entry #{entry_id_str}", ephemeral=True)
+
+@bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
+@app_commands.describe(
+    id="Entry ID to edit",
+    user="New user (optional)",
+    type="New type: shame or credit (optional)",
+    reason="New reason (optional)",
+    date="New date in YYYY-MM-DD format (optional)"
+)
+@app_commands.guild_only()
+async def change_entry(
+    interaction: discord.Interaction,
+    id: int,
+    user: discord.Member = None,
+    type: str = None,
+    reason: str = None,
+    date: str = None
+):
+    if is_command_disabled(interaction.guild_id, "change_entry"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+    
+    # At least one change must be specified
+    if not any([user, type, reason, date]):
+        await interaction.response.send_message("❌ You must specify at least one field to change (user, type, reason, or date).", ephemeral=True)
+        return
+        
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return
+
+    if user and user.bot:
+        await interaction.response.send_message("❌ You cannot assign a bot.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    entry_id_str = str(id)
+    if entry_id_str not in guild_data["entries"]:
+        await interaction.response.send_message("❌ Entry ID not found.", ephemeral=True)
+        return
+
+    old_entry = dict(guild_data["entries"][entry_id_str])
+    new_entry = dict(old_entry)
+    
+    # Apply changes
+    if user:
+        new_entry["user_id"] = user.id
+        new_entry["username"] = user.name
+    
+    if type:
+        entry_type = type.lower()
+        if entry_type not in ["shame", "credit"]:
+            await interaction.response.send_message("❌ Type must be 'shame' or 'credit'.", ephemeral=True)
+            return
+        new_entry["type"] = entry_type
+    
     if reason:
-        response_lines.append(f"**Removal Reason:** {reason}")
-    response_lines.append(f"**Entry ID:** {entry_id_str}")
-    response_lines.append(f"*Removed by `{interaction.user.name}`*")
+        new_entry["reason"] = reason
+    
+    if date:
+        try:
+            parsed_date = datetime.strptime(date, "%Y-%m-%d")
+            parsed_date = parsed_date.replace(hour=12, minute=0, second=0)
+            new_entry["date"] = parsed_date.isoformat()
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid date format. Use YYYY-MM-DD.", ephemeral=True)
+            return
+    
+    guild_data["entries"][entry_id_str] = new_entry
+    update_guild_data(interaction.guild_id, guild_data)
+    
+    # Broadcast edit message
+    await broadcast_entry_edit(interaction, id, old_entry, new_entry)
+    
+    # Send updated hall display
+    hall_messages = build_hall_display(interaction.guild, interaction.guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    if shame_channel_id:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
+            try:
+                for msg in hall_messages:
+                    if msg:
+                        await channel.send(msg)
+            except discord.Forbidden:
+                pass
 
-    await interaction.response.send_message("\n".join(response_lines))
+    await interaction.response.send_message(f"✅ Updated entry #{entry_id_str}", ephemeral=True)
 
-@bot.tree.command(name="list_my_shame", description="List your hall of shame entries")
-@app_commands.guild_only()
-async def list_my_shame(interaction: discord.Interaction):
-    if is_command_disabled(interaction.guild_id, "list_my_shame"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
-        return
-        
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-
-    remove_expired_entries(guild_data)
-
-    user_entries = {k: v for k, v in guild_data["entries"].items() if v["user_id"] == interaction.user.id}
-
-    if not user_entries:
-        await interaction.response.send_message("✅ You have no entries in the hall of shame.", ephemeral=True)
-        return
-
-    expiry_days = guild_data.get("expiry_days")
-    response_lines = [f"📋 **Hall of Shame Entries for {interaction.user.name}:**\n"]
-
-    for eid, entry in user_entries.items():
-        entry_date = datetime.fromisoformat(entry["date"])
-        entry_timestamp = int(entry_date.timestamp())
-        reason = entry.get("reason", "No reason provided")
-        
-        if expiry_days is not None:
-            expiry_date = entry_date + timedelta(days=expiry_days)
-            expiry_timestamp = int(expiry_date.timestamp())
-            response_lines.append(f"🔹 **ID: {eid}** - {reason}\n└ Added <t:{entry_timestamp}:d> (Expires <t:{expiry_timestamp}:R>)")
-        else:
-            response_lines.append(f"🔹 **ID: {eid}** - {reason}\n└ Added <t:{entry_timestamp}:d> (Permanent Entry)")
-
-    await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
-
-@bot.tree.command(name="list_all_shame", description="Lists all entries in the hall o' shame.")
-@app_commands.guild_only()
-async def list_all_shame(interaction: discord.Interaction):
-    if is_command_disabled(interaction.guild_id, "shameboard"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
-        return
-        
-    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
-    if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
-        return
-
-    guild_data = get_guild_data(interaction.guild_id)
-    cooldown_seconds = guild_data.get("cooldown", 0)
-    if cooldown_seconds > 0:
-        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
-
-    remove_expired_entries(guild_data)
-
-    if not guild_data["entries"]:
-        await interaction.response.send_message("🕊️ The Hall of Shame is currently clean and empty.", ephemeral=True)
-        return
-
-    user_counts = {}
-    for entry in guild_data["entries"].values():
-        uid = entry["user_id"]
-        if uid not in user_counts:
-            user_counts[uid] = {"username": entry["username"], "count": 0}
-        user_counts[uid]["count"] += 1
-
-    sorted_users = sorted(user_counts.items(), key=lambda x: x[1]["count"], reverse=True)
-    expiry_days = guild_data.get("expiry_days")
-
-    response_lines = ["🏆 **Server Hall of Shame Leaderboard** 🏆\n"]
-    for index, (uid, info_dict) in enumerate(sorted_users, 1):
-        medal = "🥇 " if index == 1 else "🥈 " if index == 2 else "🥉 " if index == 3 else f"**#{index}** "
-        response_lines.append(f"{medal}`{info_dict['username']}` — {info_dict['count']} active entry/entries")
-        
-        for eid, entry in guild_data["entries"].items():
-            if entry["user_id"] == uid:
-                entry_date = datetime.fromisoformat(entry["date"])
-                expiry_date = entry_date + timedelta(days=expiry_days) if expiry_days is not None else None
-                entry_timestamp = int(entry_date.timestamp())
-                expiry_timestamp = int(expiry_date.timestamp()) if expiry_date else None
-                reason = entry.get("reason", "No reason provided")
-                
-                if expiry_timestamp:
-                    response_lines.append(f"  └ `ID: {eid}` <t:{entry_timestamp}:d> (expires <t:{expiry_timestamp}:R>) - *{reason}*")
-                else:
-                    response_lines.append(f"  └ `ID: {eid}` <t:{entry_timestamp}:d> (Permanent) - *{reason}*")
-        response_lines.append("")
-
-    await interaction.response.send_message("\n".join(response_lines))
+# /list_my_shame and /list_all_shame removed in v1.9.0
 
 @bot.tree.command(name="vote", description="Adds a vote to kick a member, which expires after a day.")
 @app_commands.describe(user="The user to vote for", anonymous="Whether your vote is anonymous (default: True)")
@@ -1779,29 +2148,28 @@ async def reset_manager_role(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Manager role reset. Only Moderators can manage the bot now.")
 
 # --- SHAME CONFIG ---
-@bot.tree.command(name="shame_config_set", description="Sets the shame channel and shame expiry timer.")
+@bot.tree.command(name="set_shame_channel", description="Sets the broadcast channel for Hall of Shame/Credit")
+@app_commands.describe(broadcast_channel="The broadcast channel for shame/credit entries")
 @app_commands.guild_only()
-async def shame_config_set(interaction: discord.Interaction, channel: discord.TextChannel = None, expiry_days: int = None):
+async def set_shame_channel(interaction: discord.Interaction, broadcast_channel: discord.TextChannel):
     if not is_manager(interaction):
         await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
-    if channel: guild_data["shame_channel"] = channel.id
-    if expiry_days is not None: guild_data["expiry_days"] = None if expiry_days <= 0 else expiry_days
+    guild_data["shame_channel"] = broadcast_channel.id
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("✅ Shame configuration updated.")
+    await interaction.response.send_message(f"✅ Shame broadcast channel set to {broadcast_channel.mention}")
 
-@bot.tree.command(name="shame_config_reset", description="Resets the shame feature configuration.")
+@bot.tree.command(name="reset_shame_channel", description="Resets the Hall of Shame/Credit broadcast channel")
 @app_commands.guild_only()
-async def shame_config_reset(interaction: discord.Interaction):
+async def reset_shame_channel(interaction: discord.Interaction):
     if not is_manager(interaction):
         await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["shame_channel"] = None
-    guild_data["expiry_days"] = None
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("✅ Shame configuration reset.")
+    await interaction.response.send_message("✅ Shame broadcast channel reset.")
 
 # --- VOTEKICK CONFIG ---
 @bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
