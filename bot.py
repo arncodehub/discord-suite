@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.1"
+BOT_VERSION = "1.9.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -528,6 +528,58 @@ def get_member_display_name(member) -> str:
         return "Unknown User"
     return member.display_name or member.name
 
+def escape_discord_formatting(text: str) -> str:
+    """Escape Discord formatting characters."""
+    chars_to_escape = ['*', '_', '~', '`', '|', '>', '\\']
+    for char in chars_to_escape:
+        text = text.replace(char, '\\' + char)
+    return text
+
+def parse_flexible_date(date_str: str) -> datetime:
+    """
+    Parse date in M/D/YY or MM/DD/YYYY or M/D/YYYY format.
+    Examples: 8/22/26, 08/22/2026, 8/3/26
+    Returns datetime object set to 12 PM.
+    """
+    if not date_str or not isinstance(date_str, str):
+        raise ValueError("Invalid date string")
+    
+    parts = date_str.strip().split('/')
+    if len(parts) != 3:
+        raise ValueError("Date must be in M/D/YY format (e.g., 8/22/26)")
+    
+    try:
+        month = int(parts[0])
+        day = int(parts[1])
+        year = int(parts[2])
+        
+        # Handle 2-digit year (assume 2000s)
+        if year < 100:
+            year += 2000
+        
+        # Validate ranges
+        if not (1 <= month <= 12):
+            raise ValueError("Month must be between 1 and 12")
+        if not (1 <= day <= 31):
+            raise ValueError("Day must be between 1 and 31")
+        
+        # Create datetime and set to 12 PM
+        return datetime(year, month, day, 12, 0, 0)
+    except (ValueError, IndexError) as e:
+        raise ValueError(f"Invalid date format. Use M/D/YY (e.g., 8/22/26): {e}")
+
+def format_date_simple(date_str: str) -> str:
+    """
+    Convert ISO date string to M/D/YY format.
+    Example: 2026-08-22T12:00:00 -> 8/22/26
+    """
+    try:
+        dt = datetime.fromisoformat(date_str)
+        year_short = dt.year % 100  # Get last 2 digits
+        return f"{dt.month}/{dt.day}/{year_short}"
+    except:
+        return date_str
+
 def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     """
     Builds hall display messages (may be multiple if needed).
@@ -578,16 +630,15 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     
     # Build shame hall
     if shame_sorted:
-        shame_lines = [f"**Hall of Shame**"]
-        shame_lines.append("__Username - Count__")
+        shame_lines = ["**Hall of Shame**"]
         
         for user_id, entries_list, _ in shame_sorted:
             member = guild.get_member(user_id)
-            display_name = get_member_display_name(member)
+            display_name = escape_discord_formatting(get_member_display_name(member))
             count = len(entries_list)
             
             shame_lines.append(f"")
-            shame_lines.append(f"`{display_name}` - **{count}**")
+            shame_lines.append(f"{display_name} - **{count}**")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -601,16 +652,15 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     
     # Build credit hall
     if credit_sorted:
-        credit_lines = [f"**Hall of Credit**"]
-        credit_lines.append("__Username - Count__")
+        credit_lines = ["**Hall of Credit**"]
         
         for user_id, entries_list, _ in credit_sorted:
             member = guild.get_member(user_id)
-            display_name = get_member_display_name(member)
+            display_name = escape_discord_formatting(get_member_display_name(member))
             count = len(entries_list)
             
             credit_lines.append(f"")
-            credit_lines.append(f"`{display_name}` - **{count}**")
+            credit_lines.append(f"{display_name} - **{count}**")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -643,11 +693,12 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     shame_channel_id = guild_data.get("shame_channel")
     
     type_name = "Shame" if entry_type == "shame" else "Credit"
+    formatted_date = format_date_simple(date_str)
     
     broadcast_msg = (
-        f"@{user.display_name} nominated @{user.display_name} for the Hall of {type_name}!!\n"
+        f"{interaction.user.mention} nominated {user.mention} for the Hall of {type_name}!!\n"
         f"Reason: {reason}\n"
-        f"Date: {date_str}\n"
+        f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
     )
     
@@ -669,14 +720,20 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     
     entry_type = entry.get("type", "shame")
     type_name = "shame" if entry_type == "shame" else "credit"
+    user_id = entry.get("user_id")
     username = entry.get("username", "Unknown")
     reason = entry.get("reason", "No reason provided")
     date_str = entry.get("date", "Unknown date")
+    formatted_date = format_date_simple(date_str)
+    
+    # Try to get member for mention, fallback to username
+    member = interaction.guild.get_member(user_id) if user_id else None
+    user_ref = member.mention if member else f"@{username}"
     
     broadcast_msg = (
-        f"@{interaction.user.display_name} deleted {type_name} entry #{entry_id} which was for @{username}\n"
+        f"{interaction.user.mention} deleted {type_name} entry #{entry_id} which was for {user_ref}\n"
         f"Reason: {reason}\n"
-        f"Date: {date_str}"
+        f"Date: {formatted_date}"
     )
     
     if shame_channel_id:
@@ -712,6 +769,9 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
                 display_key = "User"
                 old_display = old_entry.get("username", "Unknown")
                 new_display = new_entry.get("username", "Unknown")
+            elif key == "date":
+                old_display = format_date_simple(str(old_val))
+                new_display = format_date_simple(str(new_val))
             else:
                 old_display = str(old_val)
                 new_display = str(new_val)
@@ -725,7 +785,7 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     
     unchanged_str = ", ".join([k.replace("_", " ").title() for k in unchanged if k != "user_id"])
     
-    broadcast_msg = f"@{interaction.user.display_name} changed entry #{entry_id}\n"
+    broadcast_msg = f"{interaction.user.mention} changed entry #{entry_id}\n"
     broadcast_msg += "\n".join(changes)
     if unchanged_str:
         broadcast_msg += f"\nUnchanged: {unchanged_str}"
@@ -748,14 +808,20 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     
     entry_type = entry.get("type", "shame")
     type_name = "Shame" if entry_type == "shame" else "Credit"
+    user_id = entry.get("user_id")
     username = entry.get("username", "Unknown")
     reason = entry.get("reason", "No reason provided")
     date_str = entry.get("date", "Unknown date")
+    formatted_date = format_date_simple(date_str)
+    
+    # Try to get member for mention, fallback to username
+    member = guild.get_member(user_id) if user_id else None
+    user_ref = member.mention if member else f"@{username}"
     
     expire_msg = (
-        f"A {type_name.lower()} entry for @{username} has expired!\n"
+        f"A {type_name.lower()} entry for {user_ref} has expired!\n"
         f"Reason: {reason}\n"
-        f"Date: {date_str}\n"
+        f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
     )
     
@@ -1640,7 +1706,7 @@ async def info(interaction: discord.Interaction):
     user="The user to nominate",
     type="Type: Shame or Credit",
     reason="Reason for the nomination",
-    date="Date of the event (optional, defaults to today)"
+    date="Date of the event in M/D/YY format (e.g., 8/22/26) - optional, defaults to today"
 )
 @app_commands.choices(type=[
     app_commands.Choice(name="Shame", value="shame"),
@@ -1652,7 +1718,7 @@ async def create_entry(
     user: discord.Member, 
     type: app_commands.Choice[str],
     reason: str,
-    date: datetime = None
+    date: str = None
 ):
     if is_command_disabled(interaction.guild_id, "create_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1679,16 +1745,23 @@ async def create_entry(
     # Parse date - use the date picker value or default to now at 12 PM Pacific
     entry_type = type.value
     if date:
-        # Set to 12 PM Pacific
-        entry_date = date.replace(hour=12, minute=0, second=0, microsecond=0)
-        entry_date_str = entry_date.isoformat()
+        try:
+            # Parse M/D/YY format and set to 12 PM Pacific
+            entry_date = parse_flexible_date(date)
+            entry_date_str = entry_date.isoformat()
+        except (ValueError, AttributeError) as e:
+            await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
+            return
     else:
         # Default to current time, 12 PM Pacific
         now = datetime.now()
         entry_date_str = now.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
     
-    # Get next persistent ID
+    # Get next persistent ID (this updates guild_data internally)
     entry_id = get_next_entry_id(interaction.guild_id)
+    
+    # CRITICAL: Reload guild_data after get_next_entry_id updates it
+    guild_data = get_guild_data(interaction.guild_id)
     
     # Create entry
     guild_data["entries"][str(entry_id)] = {
@@ -1774,7 +1847,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
     user="New user (optional)",
     type="New type: Shame or Credit (optional)",
     reason="New reason (optional)",
-    date="New date (optional)"
+    date="New date in M/D/YY format (e.g., 8/22/26) - optional"
 )
 @app_commands.choices(type=[
     app_commands.Choice(name="Shame", value="shame"),
@@ -1787,7 +1860,7 @@ async def change_entry(
     user: discord.Member = None,
     type: app_commands.Choice[str] = None,
     reason: str = None,
-    date: datetime = None
+    date: str = None
 ):
     if is_command_disabled(interaction.guild_id, "change_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1837,9 +1910,13 @@ async def change_entry(
         new_entry["reason"] = reason
     
     if date:
-        # Set to 12 PM Pacific
-        entry_date = date.replace(hour=12, minute=0, second=0, microsecond=0)
-        new_entry["date"] = entry_date.isoformat()
+        try:
+            # Parse M/D/YY format and set to 12 PM Pacific
+            entry_date = parse_flexible_date(date)
+            new_entry["date"] = entry_date.isoformat()
+        except (ValueError, AttributeError) as e:
+            await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
+            return
     
     guild_data["entries"][entry_id_str] = new_entry
     update_guild_data(interaction.guild_id, guild_data)
