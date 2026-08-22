@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.3"
+BOT_VERSION = "1.9.4"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -562,6 +562,43 @@ def parse_flexible_date(date_str: str) -> datetime:
         return datetime(year, month, day, 12, 0, 0)
     except (ValueError, IndexError) as e:
         raise ValueError(f"Invalid date format. Use M/D/YY (e.g., 8/22/26): {e}")
+
+def validate_entry_date(specified_date: datetime, entry_type: str) -> tuple[bool, datetime, str]:
+    """
+    Validates if an entry date is within acceptable expiry window.
+    Attempts to use 12 PM; if expired, tries 11:59 PM same day.
+    
+    A = current time
+    B = specified date (already parsed to 12 PM if provided)
+    
+    For shame entries: A must be <= B + 7 days
+    For credit entries: A must be <= B + 21 days
+    
+    Returns: (is_valid, adjusted_datetime, error_message)
+    If valid, adjusted_datetime is the timestamp to use (12 PM or 11:59 PM)
+    If invalid, error_message explains why
+    """
+    now = datetime.now()
+    expiry_days = 7 if entry_type == "shame" else 21
+    
+    # Try 12 PM first
+    entry_date_12pm = specified_date.replace(hour=12, minute=0, second=0)
+    expiry_at_12pm = entry_date_12pm + timedelta(days=expiry_days)
+    
+    if now <= expiry_at_12pm:
+        # 12 PM works
+        return True, entry_date_12pm, ""
+    
+    # 12 PM failed, try 11:59 PM
+    entry_date_11pm = specified_date.replace(hour=23, minute=59, second=59)
+    expiry_at_11pm = entry_date_11pm + timedelta(days=expiry_days)
+    
+    if now <= expiry_at_11pm:
+        # 11:59 PM works
+        return True, entry_date_11pm, ""
+    
+    # Both failed
+    return False, None, f"❌ Entry date is too old. A {entry_type} entry for {specified_date.strftime('%m/%d/%y')} cannot be added (already expired or expiring immediately)."
 
 def format_date_simple(date_str: str) -> str:
     """
@@ -1750,18 +1787,25 @@ async def create_entry(
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    # Parse date - use the date picker value or default to now at 12 PM Pacific
+    # Parse date - use the date picker value or default to now at 12 PM
     entry_type = type.value
     if date:
         try:
-            # Parse M/D/YY format and set to 12 PM Pacific
+            # Parse M/D/YY format and set to 12 PM
             entry_date = parse_flexible_date(date)
-            entry_date_str = entry_date.isoformat()
+            
+            # Validate and get adjusted datetime (12 PM or 11:59 PM)
+            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date, entry_type)
+            if not is_valid:
+                await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+            
+            entry_date_str = adjusted_date.isoformat()
         except (ValueError, AttributeError) as e:
             await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
     else:
-        # Default to current time, 12 PM Pacific
+        # Default to current time, 12 PM
         now = datetime.now()
         entry_date_str = now.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
     
@@ -1919,12 +1963,31 @@ async def change_entry(
     
     if date:
         try:
-            # Parse M/D/YY format and set to 12 PM Pacific
+            # Parse M/D/YY format and set to 12 PM
             entry_date = parse_flexible_date(date)
-            new_entry["date"] = entry_date.isoformat()
+            
+            # Validate and get adjusted datetime (12 PM or 11:59 PM)
+            # Use the new type if it was changed, otherwise use the existing type
+            effective_type = new_entry.get("type", old_entry.get("type", "shame"))
+            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date, effective_type)
+            if not is_valid:
+                await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+            
+            new_entry["date"] = adjusted_date.isoformat()
         except (ValueError, AttributeError) as e:
             await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
+    elif type:
+        # If type is being changed but date is not, validate existing date against new type
+        existing_date = datetime.fromisoformat(old_entry.get("date", datetime.now().isoformat()))
+        effective_type = type.value
+        is_valid, adjusted_date, error_msg = validate_entry_date(existing_date, effective_type)
+        if not is_valid:
+            await interaction.response.send_message(error_msg, ephemeral=True)
+            return
+        # Update the date to the adjusted version if validation passed
+        new_entry["date"] = adjusted_date.isoformat()
     
     guild_data["entries"][entry_id_str] = new_entry
     update_guild_data(interaction.guild_id, guild_data)
