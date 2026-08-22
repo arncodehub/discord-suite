@@ -580,34 +580,34 @@ def parse_flexible_date(date_str: str) -> datetime:
 def validate_entry_date(specified_date: datetime, entry_type: str) -> tuple[bool, datetime, str]:
     """
     Validates if an entry date is within acceptable expiry window.
-    Attempts to use 12 PM; if expired, tries 11:59 PM same day.
+    Attempts to use 12 PM Pacific; if expired, tries 11:59 PM Pacific same day.
     
-    A = current time
-    B = specified date (already parsed to 12 PM if provided)
+    A = current time (Pacific)
+    B = specified date (already parsed to 12 PM Pacific if provided)
     
     For shame entries: A must be <= B + 7 days
     For credit entries: A must be <= B + 21 days
     
     Returns: (is_valid, adjusted_datetime, error_message)
-    If valid, adjusted_datetime is the timestamp to use (12 PM or 11:59 PM)
+    If valid, adjusted_datetime is the timestamp to use (12 PM or 11:59 PM Pacific)
     If invalid, error_message explains why
     """
-    now = datetime.now()
+    pacific_now = get_pacific_time()
     expiry_days = 7 if entry_type == "shame" else 21
     
-    # Try 12 PM first
-    entry_date_12pm = specified_date.replace(hour=12, minute=0, second=0)
+    # specified_date is already in Pacific time at 12 PM
+    entry_date_12pm = specified_date
     expiry_at_12pm = entry_date_12pm + timedelta(days=expiry_days)
     
-    if now <= expiry_at_12pm:
+    if pacific_now <= expiry_at_12pm:
         # 12 PM works
         return True, entry_date_12pm, ""
     
-    # 12 PM failed, try 11:59 PM
+    # 12 PM failed, try 11:59 PM same day
     entry_date_11pm = specified_date.replace(hour=23, minute=59, second=59)
     expiry_at_11pm = entry_date_11pm + timedelta(days=expiry_days)
     
-    if now <= expiry_at_11pm:
+    if pacific_now <= expiry_at_11pm:
         # 11:59 PM works
         return True, entry_date_11pm, ""
     
@@ -1804,15 +1804,20 @@ async def create_entry(
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    # Parse date - use the date picker value or default to now at 12 PM
+    # Parse date - use the date picker value or default to current Pacific time
     entry_type = type.value
     if date:
         try:
-            # Parse M/D/YY format and set to 12 PM
+            # Parse M/D/YY format and set to 12 PM Pacific
             entry_date = parse_flexible_date(date)
             
-            # Validate and get adjusted datetime (12 PM or 11:59 PM)
-            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date, entry_type)
+            # Convert to Pacific timezone at 12 PM
+            pacific_12pm = get_pacific_time().replace(hour=12, minute=0, second=0, microsecond=0)
+            # Use the specified date but in Pacific timezone
+            entry_date_pacific = pacific_12pm.replace(month=entry_date.month, day=entry_date.day, year=entry_date.year)
+            
+            # Validate and get adjusted datetime (12 PM or 11:59 PM Pacific)
+            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, entry_type)
             if not is_valid:
                 await interaction.response.send_message(error_msg, ephemeral=True)
                 return
@@ -1822,9 +1827,9 @@ async def create_entry(
             await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
     else:
-        # Default to current time, 12 PM
-        now = datetime.now()
-        entry_date_str = now.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
+        # Default to current Pacific time, no adjustment
+        pacific_now = get_pacific_time()
+        entry_date_str = pacific_now.isoformat()
     
     # Get next persistent ID (this updates guild_data internally)
     entry_id = get_next_entry_id(interaction.guild_id)
@@ -1980,13 +1985,18 @@ async def change_entry(
     
     if date:
         try:
-            # Parse M/D/YY format and set to 12 PM
+            # Parse M/D/YY format and convert to Pacific timezone at 12 PM
             entry_date = parse_flexible_date(date)
             
-            # Validate and get adjusted datetime (12 PM or 11:59 PM)
+            # Convert to Pacific timezone at 12 PM
+            pacific_12pm = get_pacific_time().replace(hour=12, minute=0, second=0, microsecond=0)
+            # Use the specified date but in Pacific timezone
+            entry_date_pacific = pacific_12pm.replace(month=entry_date.month, day=entry_date.day, year=entry_date.year)
+            
+            # Validate and get adjusted datetime (12 PM or 11:59 PM Pacific)
             # Use the new type if it was changed, otherwise use the existing type
             effective_type = new_entry.get("type", old_entry.get("type", "shame"))
-            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date, effective_type)
+            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, effective_type)
             if not is_valid:
                 await interaction.response.send_message(error_msg, ephemeral=True)
                 return
