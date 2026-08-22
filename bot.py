@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.4"
+BOT_VERSION = "1.9.5"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -530,6 +530,20 @@ def escape_discord_formatting(text: str) -> str:
         text = text.replace(char, '\\' + char)
     return text
 
+def get_pacific_time() -> datetime:
+    """Get current time in Pacific timezone (UTC-7 or UTC-8 depending on DST)."""
+    from datetime import timezone, timedelta
+    # Pacific time is UTC-7 (PDT) or UTC-8 (PST)
+    # For simplicity, we'll use a fixed offset. In summer it's -7, in winter it's -8
+    # This is a simplified approach; alternatively use pytz if available
+    utc_now = datetime.now(timezone.utc)
+    # Determine if DST is in effect (rough approximation: roughly March-November)
+    if utc_now.month >= 3 and utc_now.month <= 11:
+        pst = utc_now.astimezone(timezone(timedelta(hours=-7)))  # PDT
+    else:
+        pst = utc_now.astimezone(timezone(timedelta(hours=-8)))  # PST
+    return pst.replace(tzinfo=None)
+
 def parse_flexible_date(date_str: str) -> datetime:
     """
     Parse date in M/D/YY or MM/DD/YYYY or M/D/YYYY format.
@@ -660,6 +674,9 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     shame_emoji = "<:shame:1536070204419866707>"
     credit_emoji = "<:credit:1536076540889010188>"
     
+    # Get Pacific time for expiry calculations
+    pacific_now = get_pacific_time()
+    
     # Build shame hall
     if shame_sorted:
         shame_lines = ["**Hall of Shame**"]
@@ -670,7 +687,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             count = len(entries_list)
             
             shame_lines.append(f"")
-            shame_lines.append(f"{display_name} - **{count}**")
+            shame_lines.append(f"__{display_name} - {count}__")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -692,7 +709,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             count = len(entries_list)
             
             credit_lines.append(f"")
-            credit_lines.append(f"{display_name} - **{count}**")
+            credit_lines.append(f"__{display_name} - {count}__")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
