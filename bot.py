@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.2"
+BOT_VERSION = "1.9.3"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -270,12 +270,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     except Exception:
         pass
 
-@bot.tree.interaction_check
-async def global_dm_check(interaction: discord.Interaction) -> bool:
-    if interaction.guild is None and interaction.command and interaction.command.name != "info":
-        await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
-        return False
-    return True
+# Removed duplicate interaction_check - consolidated into global_interaction_check below
 
 async def run_discord_channel_backup():
     """Backup data files straight to the developer's DM if 24 hours have passed."""
@@ -1613,10 +1608,23 @@ async def on_ready():
     bot.tree.add_command(wordle_group)
 
     try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} application commands globally.")
+        # Add retry logic for command sync to handle rate limits
+        max_sync_attempts = 3
+        for attempt in range(max_sync_attempts):
+            try:
+                synced = await bot.tree.sync()
+                print(f"Synced {len(synced)} application commands globally.")
+                break
+            except discord.errors.HTTPException as e:
+                if e.status == 429 and attempt < max_sync_attempts - 1:
+                    wait_time = 30 * (attempt + 1)  # 30, 60 seconds
+                    print(f"Rate limited during command sync. Waiting {wait_time} seconds... (Attempt {attempt + 1}/{max_sync_attempts})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
     except Exception as e:
         print(f"Failed to sync application tree parameters: {e}")
+        await broadcast_error_log(f"⚠️ **Command Sync Failed**: {e}")
         
     await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
 
@@ -2537,7 +2545,28 @@ initialize_rate_limits()
 
 if __name__ == "__main__":
     if TOKEN:
-        bot.run(TOKEN)
+        max_retries = 5
+        retry_delay = 10  # Start with 10 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                bot.run(TOKEN)
+                break  # If successful, exit loop
+            except discord.errors.HTTPException as e:
+                if e.status == 429:  # Rate limit error
+                    if attempt < max_retries - 1:
+                        print(f"⚠️ Rate limited by Discord API. Waiting {retry_delay} seconds before retry {attempt + 2}/{max_retries}...")
+                        import time
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        print(f"🚨 Failed to connect after {max_retries} attempts due to rate limiting.")
+                        raise
+                else:
+                    raise  # Re-raise if not a rate limit error
+            except Exception as e:
+                print(f"🚨 Unexpected error during bot startup: {e}")
+                raise
     else:
         print("🚨 Critical Setup Error: DISCORD_TOKEN environmental string injection variable missing!")
         
