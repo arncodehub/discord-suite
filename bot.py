@@ -629,6 +629,7 @@ def format_date_simple(date_str: str) -> str:
 def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     """
     Builds hall display messages (may be multiple if needed).
+    Splits messages at 2000 character limit with --- separator.
     Returns list of message strings.
     """
     guild_data = get_guild_data(guild_id)
@@ -677,6 +678,32 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     # Get Pacific time for expiry calculations
     pacific_now = get_pacific_time()
     
+    def split_message_at_limit(lines: list) -> list:
+        """Split lines into 2000 char chunks, ending each with --- separator"""
+        result = []
+        current_msg = ""
+        
+        for line in lines:
+            test_msg = current_msg + line + "\n" if current_msg else line + "\n"
+            
+            # Account for potential --- separator (4 chars + newline)
+            if len(test_msg) > 1996:
+                # Current message is full, close it with separator
+                if current_msg:
+                    current_msg = current_msg.rstrip("\n") + "\n---"
+                    result.append(current_msg)
+                # Start new message with current line
+                current_msg = line + "\n"
+            else:
+                current_msg = test_msg
+        
+        # Add remaining content
+        if current_msg:
+            current_msg = current_msg.rstrip("\n")
+            result.append(current_msg)
+        
+        return result
+    
     # Build shame hall
     if shame_sorted:
         shame_lines = ["**Hall of Shame**"]
@@ -697,7 +724,8 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
                 
                 shame_lines.append(f"{shame_emoji} {reason} (expires <t:{expiry_timestamp}:R>)")
         
-        messages.append("\n".join(shame_lines))
+        shame_messages = split_message_at_limit(shame_lines)
+        messages.extend(shame_messages)
     
     # Build credit hall
     if credit_sorted:
@@ -719,7 +747,8 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
                 
                 credit_lines.append(f"{credit_emoji} {reason} (expires <t:{expiry_timestamp}:R>)")
         
-        messages.append("\n".join(credit_lines))
+        credit_messages = split_message_at_limit(credit_lines)
+        messages.extend(credit_messages)
     
     return messages
 
