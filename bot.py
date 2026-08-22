@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.0"
+BOT_VERSION = "1.9.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1638,17 +1638,21 @@ async def info(interaction: discord.Interaction):
 @bot.tree.command(name="create_entry", description="Create a Hall of Shame/Credit entry")
 @app_commands.describe(
     user="The user to nominate",
-    type="Type: shame or credit",
+    type="Type: Shame or Credit",
     reason="Reason for the nomination",
-    date="Optional date (format: YYYY-MM-DD, assumed 12PM Pacific)"
+    date="Date of the event (optional, defaults to today)"
 )
+@app_commands.choices(type=[
+    app_commands.Choice(name="Shame", value="shame"),
+    app_commands.Choice(name="Credit", value="credit")
+])
 @app_commands.guild_only()
 async def create_entry(
     interaction: discord.Interaction, 
     user: discord.Member, 
-    type: str,
+    type: app_commands.Choice[str],
     reason: str,
-    date: str = None
+    date: datetime = None
 ):
     if is_command_disabled(interaction.guild_id, "create_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1666,28 +1670,18 @@ async def create_entry(
     if user.bot:
         await interaction.response.send_message("❌ You cannot nominate a bot.", ephemeral=True)
         return
-    
-    # Validate type
-    entry_type = type.lower()
-    if entry_type not in ["shame", "credit"]:
-        await interaction.response.send_message("❌ Type must be 'shame' or 'credit'.", ephemeral=True)
-        return
 
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    # Parse date if provided
+    # Parse date - use the date picker value or default to now at 12 PM Pacific
+    entry_type = type.value
     if date:
-        try:
-            parsed_date = datetime.strptime(date, "%Y-%m-%d")
-            # Set to 12 PM Pacific
-            parsed_date = parsed_date.replace(hour=12, minute=0, second=0)
-            entry_date_str = parsed_date.isoformat()
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid date format. Use YYYY-MM-DD.", ephemeral=True)
-            return
+        # Set to 12 PM Pacific
+        entry_date = date.replace(hour=12, minute=0, second=0, microsecond=0)
+        entry_date_str = entry_date.isoformat()
     else:
         # Default to current time, 12 PM Pacific
         now = datetime.now()
@@ -1778,18 +1772,22 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 @app_commands.describe(
     id="Entry ID to edit",
     user="New user (optional)",
-    type="New type: shame or credit (optional)",
+    type="New type: Shame or Credit (optional)",
     reason="New reason (optional)",
-    date="New date in YYYY-MM-DD format (optional)"
+    date="New date (optional)"
 )
+@app_commands.choices(type=[
+    app_commands.Choice(name="Shame", value="shame"),
+    app_commands.Choice(name="Credit", value="credit")
+])
 @app_commands.guild_only()
 async def change_entry(
     interaction: discord.Interaction,
     id: int,
     user: discord.Member = None,
-    type: str = None,
+    type: app_commands.Choice[str] = None,
     reason: str = None,
-    date: str = None
+    date: datetime = None
 ):
     if is_command_disabled(interaction.guild_id, "change_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
@@ -1832,23 +1830,16 @@ async def change_entry(
         new_entry["username"] = user.name
     
     if type:
-        entry_type = type.lower()
-        if entry_type not in ["shame", "credit"]:
-            await interaction.response.send_message("❌ Type must be 'shame' or 'credit'.", ephemeral=True)
-            return
+        entry_type = type.value
         new_entry["type"] = entry_type
     
     if reason:
         new_entry["reason"] = reason
     
     if date:
-        try:
-            parsed_date = datetime.strptime(date, "%Y-%m-%d")
-            parsed_date = parsed_date.replace(hour=12, minute=0, second=0)
-            new_entry["date"] = parsed_date.isoformat()
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid date format. Use YYYY-MM-DD.", ephemeral=True)
-            return
+        # Set to 12 PM Pacific
+        entry_date = date.replace(hour=12, minute=0, second=0, microsecond=0)
+        new_entry["date"] = entry_date.isoformat()
     
     guild_data["entries"][entry_id_str] = new_entry
     update_guild_data(interaction.guild_id, guild_data)
