@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.7"
+BOT_VERSION = "1.9.8"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -530,6 +530,30 @@ def escape_discord_formatting(text: str) -> str:
         text = text.replace(char, '\\' + char)
     return text
 
+async def member_or_user_id_transformer(interaction: discord.Interaction, value: str) -> tuple[int, str]:
+    """
+    Transforms input to either a Member mention or a User ID.
+    Returns tuple of (user_id, username).
+    Accepts: @Member, UserID, or username
+    """
+    # Try to parse as User ID first
+    if value.isdigit():
+        user_id = int(value)
+        try:
+            user = await interaction.client.fetch_user(user_id)
+            return user_id, user.name
+        except discord.NotFound:
+            raise app_commands.BadArgument(f"User ID {user_id} not found")
+    
+    # Try to find in current guild members
+    guild = interaction.guild
+    if guild:
+        member = discord.utils.find(lambda m: m.name == value or (m.nick and m.nick == value), guild.members)
+        if member:
+            return member.id, member.name
+    
+    raise app_commands.BadArgument(f"Could not find user: {value}. Use a User ID or mention a server member.")
+
 def get_pacific_time() -> datetime:
     """Get current time in Pacific timezone (UTC-7 or UTC-8 depending on DST)."""
     from datetime import timezone, timedelta
@@ -765,7 +789,7 @@ async def broadcast_hall_to_channel(channel: discord.TextChannel, messages: list
     except discord.Forbidden:
         return False
 
-async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int, user: discord.Member, entry_type: str, reason: str, date_str: str):
+async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int, user: discord.Member, entry_type: str, reason: str, date_str: str, username: str = None):
     """Broadcasts CREATE message."""
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
@@ -773,8 +797,11 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     type_name = "Shame" if entry_type == "shame" else "Credit"
     formatted_date = format_date_simple(date_str)
     
+    # Build user reference (mention if member, otherwise username)
+    user_ref = user.mention if user else f"@{username}"
+    
     broadcast_msg = (
-        f"{interaction.user.mention} nominated {user.mention} for the Hall of {type_name}!!\n"
+        f"{interaction.user.mention} nominated {user_ref} for the Hall of {type_name}!!\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
@@ -1794,7 +1821,7 @@ async def info(interaction: discord.Interaction):
 
 @bot.tree.command(name="create_entry", description="Create a Hall of Shame/Credit entry")
 @app_commands.describe(
-    user="The user to nominate",
+    user="The user to nominate (mention, username, or User ID)",
     type="Type: Shame or Credit",
     reason="Reason for the nomination",
     date="Date of the event in M/D/YY format (e.g., 8/22/26) - optional, defaults to today"
@@ -1806,7 +1833,7 @@ async def info(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def create_entry(
     interaction: discord.Interaction, 
-    user: discord.Member, 
+    user: str,
     type: app_commands.Choice[str],
     reason: str,
     date: str = None
@@ -1824,7 +1851,17 @@ async def create_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
-    if user.bot:
+    # Convert user string to ID and name
+    try:
+        user_id, username = await member_or_user_id_transformer(interaction, user)
+    except app_commands.BadArgument as e:
+        await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
+        return
+
+    # Check if user is a bot (only if they're in the guild)
+    guild = interaction.guild
+    member = guild.get_member(user_id) if guild else None
+    if member and member.bot:
         await interaction.response.send_message("❌ You cannot nominate a bot.", ephemeral=True)
         return
 
@@ -1868,8 +1905,8 @@ async def create_entry(
     
     # Create entry
     guild_data["entries"][str(entry_id)] = {
-        "user_id": user.id,
-        "username": user.name,
+        "user_id": user_id,
+        "username": username,
         "type": entry_type,
         "reason": reason,
         "date": entry_date_str,
@@ -1877,8 +1914,9 @@ async def create_entry(
     }
     update_guild_data(interaction.guild_id, guild_data)
     
-    # Broadcast
-    await broadcast_entry_create(interaction, entry_id, user, entry_type, reason, entry_date_str)
+    # Broadcast (need to get member for mention if in guild, otherwise just use username)
+    target_member = interaction.guild.get_member(user_id) if interaction.guild else None
+    await broadcast_entry_create(interaction, entry_id, target_member, entry_type, reason, entry_date_str, username)
     
     # Send hall display
     hall_messages = build_hall_display(interaction.guild, interaction.guild_id)
@@ -1947,7 +1985,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
     id="Entry ID to edit",
-    user="New user (optional)",
+    user="New user (mention, username, or User ID) - optional",
     type="New type: Shame or Credit (optional)",
     reason="New reason (optional)",
     date="New date in M/D/YY format (e.g., 8/22/26) - optional"
@@ -1960,7 +1998,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 async def change_entry(
     interaction: discord.Interaction,
     id: int,
-    user: discord.Member = None,
+    user: str = None,
     type: app_commands.Choice[str] = None,
     reason: str = None,
     date: str = None
@@ -1983,9 +2021,20 @@ async def change_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
-    if user and user.bot:
-        await interaction.response.send_message("❌ You cannot assign a bot.", ephemeral=True)
-        return
+    # Convert user string to ID and name if provided
+    user_id = None
+    username = None
+    if user:
+        try:
+            user_id, username = await member_or_user_id_transformer(interaction, user)
+            # Check if user is a bot (only if they're in the guild)
+            member = interaction.guild.get_member(user_id) if interaction.guild else None
+            if member and member.bot:
+                await interaction.response.send_message("❌ You cannot assign a bot.", ephemeral=True)
+                return
+        except app_commands.BadArgument as e:
+            await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
+            return
 
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
@@ -2001,9 +2050,9 @@ async def change_entry(
     new_entry = dict(old_entry)
     
     # Apply changes
-    if user:
-        new_entry["user_id"] = user.id
-        new_entry["username"] = user.name
+    if user_id:
+        new_entry["user_id"] = user_id
+        new_entry["username"] = username
     
     if type:
         entry_type = type.value
