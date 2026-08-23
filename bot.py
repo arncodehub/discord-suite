@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.14"
+BOT_VERSION = "1.9.15"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -822,7 +822,14 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     formatted_date = format_date_simple(date_str)
     
     # Use alias instead of ping
-    user_ref = USER_ALIASES.get(int(username) if isinstance(username, str) and username.isdigit() else user.id, username)
+    if user:
+     target_id = user.id
+    elif isinstance(username, str) and username.isdigit():
+        target_id = int(username)
+    else:
+        target_id = None
+
+    user_ref = USER_ALIASES.get(target_id, username)
     action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")
 
     broadcast_msg = (
@@ -830,7 +837,7 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
         f"User: {user_ref}\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}\n"
-        f"ID: {entry_id}"
+        f"ID: {entry_id}\n"
         f"Added by: {action_taker}"
     )
     
@@ -865,7 +872,7 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     broadcast_msg = (
         f"🗑️ Deleted {type_name} entry #{entry_id} for {user_ref}\n"
         f"Reason: {reason}\n"
-        f"Date: {formatted_date}"
+        f"Date: {formatted_date}\n"
         f"Deleted by: {action_taker}"
     )
     
