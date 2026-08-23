@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.11"
+BOT_VERSION = "1.9.12"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -655,7 +655,19 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     Builds hall display messages (may be multiple if needed).
     Splits messages at 2000 character limit with --- separator.
     Returns list of message strings.
+    Uses aliases instead of pinging users.
     """
+    # User ID to alias mapping
+    user_aliases = {
+        995165764594176010: "67",
+        807087691522375681: "no longer an idiot",
+        1294395464803811452: "very speedy miner",
+        1137904269664718948: "Airplane",
+        838589314756902984: "Link's Siemens S700 LRV",
+        1191502706360205412: "Snowy City",
+        987131131767959614: "N.12"
+    }
+    
     guild_data = get_guild_data(guild_id)
     
     if not guild_data["entries"]:
@@ -733,16 +745,17 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
         shame_lines = ["**Hall of Shame**"]
         
         for user_id, entries_list, _ in shame_sorted:
-            member = guild.get_member(user_id)
-            display_name = escape_discord_formatting(get_member_display_name(member))
+            # Use alias from mapping, fallback to username from entry
+            alias = user_aliases.get(user_id)
+            if not alias:
+                # Fallback to username stored in entry
+                alias = entries_list[0][1].get("username", str(user_id))
+            
+            alias = escape_discord_formatting(alias)
             count = len(entries_list)
             
             shame_lines.append(f"")
-            # Ping user if they're outside the server
-            if member:
-                shame_lines.append(f"__{display_name} - {count}__")
-            else:
-                shame_lines.append(f"__<@{user_id}> - {count}__")
+            shame_lines.append(f"__{alias} - {count}__")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -760,16 +773,17 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
         credit_lines = ["**Hall of Credit**"]
         
         for user_id, entries_list, _ in credit_sorted:
-            member = guild.get_member(user_id)
-            display_name = escape_discord_formatting(get_member_display_name(member))
+            # Use alias from mapping, fallback to username from entry
+            alias = user_aliases.get(user_id)
+            if not alias:
+                # Fallback to username stored in entry
+                alias = entries_list[0][1].get("username", str(user_id))
+            
+            alias = escape_discord_formatting(alias)
             count = len(entries_list)
             
             credit_lines.append(f"")
-            # Ping user if they're outside the server
-            if member:
-                credit_lines.append(f"__{display_name} - {count}__")
-            else:
-                credit_lines.append(f"__<@{user_id}> - {count}__")
+            credit_lines.append(f"__{alias} - {count}__")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -798,15 +812,26 @@ async def broadcast_hall_to_channel(channel: discord.TextChannel, messages: list
         return False
 
 async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int, user: discord.Member, entry_type: str, reason: str, date_str: str, username: str = None):
-    """Broadcasts CREATE message."""
+    """Broadcasts CREATE message. Uses aliases instead of pinging."""
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
+    
+    # User ID to alias mapping
+    user_aliases = {
+        995165764594176010: "67",
+        807087691522375681: "no longer an idiot",
+        1294395464803811452: "very speedy miner",
+        1137904269664718948: "Airplane",
+        838589314756902984: "Link's Siemens S700 LRV",
+        1191502706360205412: "Snowy City",
+        987131131767959614: "N.12"
+    }
     
     type_name = "Shame" if entry_type == "shame" else "Credit"
     formatted_date = format_date_simple(date_str)
     
-    # Build user reference (mention if member, otherwise ping via User ID)
-    user_ref = user.mention if user else f"<@{entry_id}>"
+    # Use alias instead of ping
+    user_ref = user_aliases.get(int(username) if isinstance(username, str) and username.isdigit() else user.id, username)
     
     broadcast_msg = (
         f"{interaction.user.mention} nominated {user_ref} for the Hall of {type_name}!!\n"
@@ -827,9 +852,20 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     return False
 
 async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int, entry: dict):
-    """Broadcasts DELETE message."""
+    """Broadcasts DELETE message. Uses aliases instead of pinging."""
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
+    
+    # User ID to alias mapping
+    user_aliases = {
+        995165764594176010: "67",
+        807087691522375681: "no longer an idiot",
+        1294395464803811452: "very speedy miner",
+        1137904269664718948: "Airplane",
+        838589314756902984: "Link's Siemens S700 LRV",
+        1191502706360205412: "Snowy City",
+        987131131767959614: "N.12"
+    }
     
     entry_type = entry.get("type", "shame")
     type_name = "shame" if entry_type == "shame" else "credit"
@@ -839,9 +875,8 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     date_str = entry.get("date", "Unknown date")
     formatted_date = format_date_simple(date_str)
     
-    # Try to get member for mention, fallback to username
-    member = interaction.guild.get_member(user_id) if user_id else None
-    user_ref = member.mention if member else f"@{username}"
+    # Use alias instead of mention or ping
+    user_ref = user_aliases.get(user_id, username)
     
     broadcast_msg = (
         f"{interaction.user.mention} deleted {type_name} entry #{entry_id} which was for {user_ref}\n"
@@ -915,9 +950,20 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     return False
 
 async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: int, entry: dict):
-    """Broadcasts EXPIRE message and then full hall."""
+    """Broadcasts EXPIRE message and then full hall. Uses aliases instead of pinging."""
     guild_data = get_guild_data(guild_id)
     shame_channel_id = guild_data.get("shame_channel")
+    
+    # User ID to alias mapping
+    user_aliases = {
+        995165764594176010: "67",
+        807087691522375681: "no longer an idiot",
+        1294395464803811452: "very speedy miner",
+        1137904269664718948: "Airplane",
+        838589314756902984: "Link's Siemens S700 LRV",
+        1191502706360205412: "Snowy City",
+        987131131767959614: "N.12"
+    }
     
     entry_type = entry.get("type", "shame")
     type_name = "Shame" if entry_type == "shame" else "Credit"
@@ -927,9 +973,8 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     date_str = entry.get("date", "Unknown date")
     formatted_date = format_date_simple(date_str)
     
-    # Try to get member for mention, fallback to username
-    member = guild.get_member(user_id) if user_id else None
-    user_ref = member.mention if member else f"@{username}"
+    # Use alias instead of mention or ping
+    user_ref = user_aliases.get(user_id, username)
     
     expire_msg = (
         f"A {type_name.lower()} entry for {user_ref} has expired!\n"
@@ -1829,19 +1874,30 @@ async def info(interaction: discord.Interaction):
 
 @bot.tree.command(name="create_entry", description="Create a Hall of Shame/Credit entry")
 @app_commands.describe(
-    user="The user to nominate (mention, username, or User ID)",
+    user="The user to nominate",
     type="Type: Shame or Credit",
     reason="Reason for the nomination",
     date="Date of the event in M/D/YY format (e.g., 8/22/26) - optional, defaults to today"
 )
-@app_commands.choices(type=[
-    app_commands.Choice(name="Shame", value="shame"),
-    app_commands.Choice(name="Credit", value="credit")
-])
+@app_commands.choices(
+    user=[
+        app_commands.Choice(name="67", value="995165764594176010"),
+        app_commands.Choice(name="no longer an idiot", value="807087691522375681"),
+        app_commands.Choice(name="very speedy miner", value="1294395464803811452"),
+        app_commands.Choice(name="Airplane", value="1137904269664718948"),
+        app_commands.Choice(name="Link's Siemens S700 LRV", value="838589314756902984"),
+        app_commands.Choice(name="Snowy City", value="1191502706360205412"),
+        app_commands.Choice(name="N.12", value="987131131767959614")
+    ],
+    type=[
+        app_commands.Choice(name="Shame", value="shame"),
+        app_commands.Choice(name="Credit", value="credit")
+    ]
+)
 @app_commands.guild_only()
 async def create_entry(
     interaction: discord.Interaction, 
-    user: str,
+    user: app_commands.Choice[str],
     type: app_commands.Choice[str],
     reason: str,
     date: str = None
@@ -1859,19 +1915,9 @@ async def create_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
-    # Convert user string to ID and name
-    try:
-        user_id, username = await member_or_user_id_transformer(interaction, user)
-    except ValueError as e:
-        await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
-        return
-
-    # Check if user is a bot (only if they're in the guild)
-    guild = interaction.guild
-    member = guild.get_member(user_id) if guild else None
-    if member and member.bot:
-        await interaction.response.send_message("❌ You cannot nominate a bot.", ephemeral=True)
-        return
+    # Extract user ID and name from dropdown choice
+    user_id = int(user.value)
+    username = user.name
 
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
@@ -1993,20 +2039,31 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
     id="Entry ID to edit",
-    user="New user (mention, username, or User ID) - optional",
+    user="New user - optional",
     type="New type: Shame or Credit (optional)",
     reason="New reason (optional)",
     date="New date in M/D/YY format (e.g., 8/22/26) - optional"
 )
-@app_commands.choices(type=[
-    app_commands.Choice(name="Shame", value="shame"),
-    app_commands.Choice(name="Credit", value="credit")
-])
+@app_commands.choices(
+    user=[
+        app_commands.Choice(name="67", value="995165764594176010"),
+        app_commands.Choice(name="no longer an idiot", value="807087691522375681"),
+        app_commands.Choice(name="very speedy miner", value="1294395464803811452"),
+        app_commands.Choice(name="Airplane", value="1137904269664718948"),
+        app_commands.Choice(name="Link's Siemens S700 LRV", value="838589314756902984"),
+        app_commands.Choice(name="Snowy City", value="1191502706360205412"),
+        app_commands.Choice(name="N.12", value="987131131767959614")
+    ],
+    type=[
+        app_commands.Choice(name="Shame", value="shame"),
+        app_commands.Choice(name="Credit", value="credit")
+    ]
+)
 @app_commands.guild_only()
 async def change_entry(
     interaction: discord.Interaction,
     id: int,
-    user: str = None,
+    user: app_commands.Choice[str] = None,
     type: app_commands.Choice[str] = None,
     reason: str = None,
     date: str = None
@@ -2029,20 +2086,12 @@ async def change_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
-    # Convert user string to ID and name if provided
+    # Extract user ID and name from dropdown choice if provided
     user_id = None
     username = None
     if user:
-        try:
-            user_id, username = await member_or_user_id_transformer(interaction, user)
-            # Check if user is a bot (only if they're in the guild)
-            member = interaction.guild.get_member(user_id) if interaction.guild else None
-            if member and member.bot:
-                await interaction.response.send_message("❌ You cannot assign a bot.", ephemeral=True)
-                return
-        except app_commands.BadArgument as e:
-            await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
-            return
+        user_id = int(user.value)
+        username = user.name
 
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
