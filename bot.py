@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.13"
+BOT_VERSION = "1.9.14"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -44,6 +44,18 @@ WORDLE_PRO_ROLE_ID = 1508990442736324730
 WORDLE_FAILURE_ROLE_ID = 1503904966539219064
 
 WORDLE_SCAN_DAYS = 7
+
+# Aliases
+
+USER_ALIASES = {
+    995165764594176010: "67",
+    807087691522375681: "no longer an idiot",
+    1294395464803811452: "very speedy miner",
+    1137904269664718948: "Airplane",
+    838589314756902984: "Link's Siemens S700 LRV",
+    1191502706360205412: "Snowy City",
+    987131131767959614: "N.12"
+}
 
 # Cooldown tracking: {guild_id: {user_id: timestamp}}
 cooldowns = {}
@@ -657,16 +669,6 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     Returns list of message strings.
     Uses aliases instead of pinging users.
     """
-    # User ID to alias mapping
-    user_aliases = {
-        995165764594176010: "67",
-        807087691522375681: "no longer an idiot",
-        1294395464803811452: "very speedy miner",
-        1137904269664718948: "Airplane",
-        838589314756902984: "Link's Siemens S700 LRV",
-        1191502706360205412: "Snowy City",
-        987131131767959614: "N.12"
-    }
     
     guild_data = get_guild_data(guild_id)
     
@@ -746,7 +748,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
         
         for user_id, entries_list, _ in shame_sorted:
             # Use alias from mapping, fallback to username from entry
-            alias = user_aliases.get(user_id)
+            alias = USER_ALIASES.get(user_id)
             if not alias:
                 # Fallback to username stored in entry
                 alias = entries_list[0][1].get("username", str(user_id))
@@ -774,7 +776,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
         
         for user_id, entries_list, _ in credit_sorted:
             # Use alias from mapping, fallback to username from entry
-            alias = user_aliases.get(user_id)
+            alias = USER_ALIASES.get(user_id)
             if not alias:
                 # Fallback to username stored in entry
                 alias = entries_list[0][1].get("username", str(user_id))
@@ -816,29 +818,20 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
     
-    # User ID to alias mapping
-    user_aliases = {
-        995165764594176010: "67",
-        807087691522375681: "no longer an idiot",
-        1294395464803811452: "very speedy miner",
-        1137904269664718948: "Airplane",
-        838589314756902984: "Link's Siemens S700 LRV",
-        1191502706360205412: "Snowy City",
-        987131131767959614: "N.12"
-    }
-    
     type_name = "Shame" if entry_type == "shame" else "Credit"
     formatted_date = format_date_simple(date_str)
     
     # Use alias instead of ping
-    user_ref = user_aliases.get(int(username) if isinstance(username, str) and username.isdigit() else user.id, username)
-    
+    user_ref = USER_ALIASES.get(int(username) if isinstance(username, str) and username.isdigit() else user.id, username)
+    action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")
+
     broadcast_msg = (
         f"📝 New nomination for the Hall of {type_name}!!\n"
         f"User: {user_ref}\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
+        f"Added by: {action_taker}"
     )
     
     if shame_channel_id:
@@ -857,17 +850,6 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
     
-    # User ID to alias mapping
-    user_aliases = {
-        995165764594176010: "67",
-        807087691522375681: "no longer an idiot",
-        1294395464803811452: "very speedy miner",
-        1137904269664718948: "Airplane",
-        838589314756902984: "Link's Siemens S700 LRV",
-        1191502706360205412: "Snowy City",
-        987131131767959614: "N.12"
-    }
-    
     entry_type = entry.get("type", "shame")
     type_name = "shame" if entry_type == "shame" else "credit"
     user_id = entry.get("user_id")
@@ -877,12 +859,14 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     formatted_date = format_date_simple(date_str)
     
     # Use alias instead of mention or ping
-    user_ref = user_aliases.get(user_id, username)
-    
+    user_ref = USER_ALIASES.get(user_id, username)
+    action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")
+
     broadcast_msg = (
         f"🗑️ Deleted {type_name} entry #{entry_id} for {user_ref}\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}"
+        f"Deleted by: {action_taker}"
     )
     
     if shame_channel_id:
@@ -900,7 +884,7 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     """Broadcasts EDIT message."""
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
-    
+    action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")    
     changes = []
     unchanged = []
     
@@ -934,7 +918,7 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     
     unchanged_str = ", ".join([k.replace("_", " ").title() for k in unchanged if k != "user_id"])
     
-    broadcast_msg = f"✏️ Changed entry #{entry_id}\n"
+    broadcast_msg = f"✏️ Changed entry #{entry_id} (Edited by: {action_taker})\n"
     broadcast_msg += "\n".join(changes)
     if unchanged_str:
         broadcast_msg += f"\nUnchanged: {unchanged_str}"
@@ -955,17 +939,6 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     guild_data = get_guild_data(guild_id)
     shame_channel_id = guild_data.get("shame_channel")
     
-    # User ID to alias mapping
-    user_aliases = {
-        995165764594176010: "67",
-        807087691522375681: "no longer an idiot",
-        1294395464803811452: "very speedy miner",
-        1137904269664718948: "Airplane",
-        838589314756902984: "Link's Siemens S700 LRV",
-        1191502706360205412: "Snowy City",
-        987131131767959614: "N.12"
-    }
-    
     entry_type = entry.get("type", "shame")
     type_name = "Shame" if entry_type == "shame" else "Credit"
     user_id = entry.get("user_id")
@@ -975,7 +948,7 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     formatted_date = format_date_simple(date_str)
     
     # Use alias instead of mention or ping
-    user_ref = user_aliases.get(user_id, username)
+    user_ref = USER_ALIASES.get(user_id, username)
     
     expire_msg = (
         f"A {type_name.lower()} entry for {user_ref} has expired!\n"
@@ -1906,6 +1879,10 @@ async def create_entry(
     if is_command_disabled(interaction.guild_id, "create_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
+
+    if interaction.user.id not in USER_ALIASES:
+        await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=True)
+        return
     
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
@@ -1995,7 +1972,11 @@ async def delete_entry(interaction: discord.Interaction, id: int):
     if is_command_disabled(interaction.guild_id, "delete_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
-        
+
+    if interaction.user.id not in USER_ALIASES:
+        await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=True)
+        return
+    
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
         await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
@@ -2071,6 +2052,10 @@ async def change_entry(
 ):
     if is_command_disabled(interaction.guild_id, "change_entry"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+
+    if interaction.user.id not in USER_ALIASES:
+        await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=True)
         return
     
     # At least one change must be specified
