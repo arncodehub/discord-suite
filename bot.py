@@ -1,4 +1,4 @@
-import discord
+﻿import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import os
@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.9"
+BOT_VERSION = "1.9.11"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -543,7 +543,7 @@ async def member_or_user_id_transformer(interaction: discord.Interaction, value:
             user = await interaction.client.fetch_user(user_id)
             return user_id, user.name
         except discord.NotFound:
-            raise app_commands.BadArgument(f"User ID {user_id} not found")
+            raise ValueError(f"User ID {user_id} not found")
     
     # Try to find in current guild members
     guild = interaction.guild
@@ -552,7 +552,7 @@ async def member_or_user_id_transformer(interaction: discord.Interaction, value:
         if member:
             return member.id, member.name
     
-    raise app_commands.BadArgument(f"Could not find user: {value}. Use a User ID or mention a server member.")
+    raise ValueError(f"Could not find user: {value}. Use a User ID or mention a server member.")
 
 def get_pacific_time() -> datetime:
     """Get current time in Pacific timezone (UTC-7 or UTC-8 depending on DST)."""
@@ -1862,7 +1862,7 @@ async def create_entry(
     # Convert user string to ID and name
     try:
         user_id, username = await member_or_user_id_transformer(interaction, user)
-    except app_commands.BadArgument as e:
+    except ValueError as e:
         await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
         return
 
