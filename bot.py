@@ -1,4 +1,4 @@
-﻿import discord
+import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import os
@@ -173,17 +173,17 @@ async def retry_pending_dev_dm_logs():
 
             except Exception as e:
                 if is_transient_network_error(e):
-                    print(f"ΓÅ│ Developer DM retry failed; will retry later: {e}")
+                    print(f"⏳ Developer DM retry failed; will retry later: {e}")
                     return
 
-                print(f"Γ¥î Dropping developer DM after permanent failure: {e}")
+                print(f"❌ Dropping developer DM after permanent failure: {e}")
                 pending_dev_dm_logs.pop(0)
 
     except Exception as e:
         if is_transient_network_error(e):
-            print(f"ΓÅ│ Developer DM retry connection failed: {e}")
+            print(f"⏳ Developer DM retry connection failed: {e}")
         else:
-            print(f"Γ¥î Developer DM retry failed: {e}")
+            print(f"❌ Developer DM retry failed: {e}")
 
 
 @retry_pending_dev_dm_logs.before_loop
@@ -208,7 +208,7 @@ async def broadcast_error_log(message_content: str):
         owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
 
         if not owner:
-            print("Γ¥î Failed to find bot owner for developer DM.")
+            print("❌ Failed to find bot owner for developer DM.")
             return
 
         for index, chunk in enumerate(chunks):
@@ -218,19 +218,19 @@ async def broadcast_error_log(message_content: str):
                 if is_transient_network_error(e):
                     pending_dev_dm_logs.extend(chunks[index:])
                     print(
-                        f"≡ƒôÑ Developer DM queued for retry after transient "
+                        f"📥 Developer DM queued for retry after transient "
                         f"network error: {e}"
                     )
                 else:
-                    print(f"Γ¥î Failed to transmit developer DM: {e}")
+                    print(f"❌ Failed to transmit developer DM: {e}")
                 return
 
     except Exception as e:
         if is_transient_network_error(e):
             pending_dev_dm_logs.extend(chunks)
-            print(f"≡ƒôÑ Developer DM queued for retry: {e}")
+            print(f"📥 Developer DM queued for retry: {e}")
         else:
-            print(f"Γ¥î Failed to transmit developer DM: {e}")
+            print(f"❌ Failed to transmit developer DM: {e}")
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -239,7 +239,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
     if interaction.guild is None and interaction.command and interaction.command.name != "info":
         try:
-            error_msg = "Γ¥î This command can only be used in servers."
+            error_msg = "❌ This command can only be used in servers."
             if interaction.response.is_done():
                 await interaction.followup.send(error_msg, ephemeral=True)
             else:
@@ -252,7 +252,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     tb_text = "".join(tb_lines)
     
     log_payload = (
-        f"ΓÜá∩╕Å **Application Command Error Intercepted!**\n"
+        f"⚠️ **Application Command Error Intercepted!**\n"
         f"**Command:** `/{interaction.command.name if interaction.command else 'Unknown'}`\n"
         f"**User:** {interaction.user} (`{interaction.user.id}`)\n"
         f"**Guild:** {interaction.guild.name if interaction.guild else 'DMs'} (`{interaction.guild_id}`)\n"
@@ -262,7 +262,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     await broadcast_error_log(log_payload)
     
     try:
-        error_msg = "Γ¥î An unexpected operational error occurred while processing this request. The developer has been automatically notified."
+        error_msg = "❌ An unexpected operational error occurred while processing this request. The developer has been automatically notified."
         if interaction.response.is_done():
             await interaction.followup.send(error_msg, ephemeral=True)
         else:
@@ -286,12 +286,12 @@ async def run_discord_channel_backup():
         if last_backup_str:
             last_backup_time = datetime.fromisoformat(last_backup_str)
             if now < last_backup_time + timedelta(hours=24):
-                print("ΓÅ▒∩╕Å Discord Backup Skipped: Last archive was sent less than 24 hours ago.")
+                print("⏱️ Discord Backup Skipped: Last archive was sent less than 24 hours ago.")
                 return
 
         owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
         if not owner:
-            print("Γ¥î Backup Error: Bot owner not found.")
+            print("❌ Backup Error: Bot owner not found.")
             return
 
         files_to_send = []
@@ -300,16 +300,16 @@ async def run_discord_channel_backup():
                 files_to_send.append(discord.File(file_name))
 
         if not files_to_send:
-            print("ΓÜá∩╕Å Backup Warning: No local files exist to transmit.")
+            print("⚠️ Backup Warning: No local files exist to transmit.")
             return
 
         date_stamp = now.strftime("%Y-%m-%d %H:%M:%S")
         await owner.send(
-            content=f"≡ƒôª **Automated 24-Hour Database Backup**\n≡ƒôà Timestamp: `{date_stamp}`\nΓÜá∩╕Å *Keep these files safe for disaster recovery.*",
+            content=f"📦 **Automated 24-Hour Database Backup**\n📅 Timestamp: `{date_stamp}`\n⚠️ *Keep these files safe for disaster recovery.*",
             files=files_to_send,
             silent=True
         )
-        print("≡ƒÆ╛ Success: Live JSON files dispatched to dev DM.")
+        print("💾 Success: Live JSON files dispatched to dev DM.")
 
         data["system_metadata"]["last_dev_dm_backup"] = now.isoformat()
         save_shame_data(data)
@@ -317,7 +317,7 @@ async def run_discord_channel_backup():
     except Exception as e:
         print(f"Error handling live DM backup: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"ΓÜá∩╕Å **Discord Backup Engine Failed:**\n```python\n{tb}\n```")
+        await broadcast_error_log(f"⚠️ **Discord Backup Engine Failed:**\n```python\n{tb}\n```")
 
 def load_shame_data():
     if os.path.exists(DATA_FILE):
@@ -325,7 +325,7 @@ def load_shame_data():
             with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"≡ƒÜ¿ **Corrupted `{DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
             return {}
     return {}
 
@@ -338,7 +338,7 @@ def save_shame_data(data):
     except Exception as e:
         print(f"Error saving shame data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"≡ƒÆ╛ **Disk Save Blocked (`save_shame_data`)** ΓÇö Disk likely full!\n```python\n{tb}\n```"))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_shame_data`)** — Disk likely full!\n```python\n{tb}\n```"))
 
 def get_guild_data(guild_id):
     data = load_shame_data()
@@ -378,7 +378,7 @@ def load_vote_data():
                 vote_data = json.load(f)
                 return
         except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"≡ƒÜ¿ **Corrupted `{VOTE_DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{VOTE_DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
     vote_data = {}
 
 def save_vote_data():
@@ -390,7 +390,7 @@ def save_vote_data():
     except Exception as e:
         print(f"Error saving vote data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"≡ƒÆ╛ **Disk Save Blocked (`save_vote_data`)** ΓÇö Disk likely full!\n```python\n{tb}\n```"))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_vote_data`)** — Disk likely full!\n```python\n{tb}\n```"))
 
 def get_vote_data(guild_id):
     guild_id_str = str(guild_id)
@@ -636,7 +636,7 @@ def validate_entry_date(specified_date: datetime, entry_type: str) -> tuple[bool
         return True, entry_date_11pm, ""
     
     # Both failed
-    return False, None, f"Γ¥î Entry date is too old. A {entry_type} entry for {specified_date.strftime('%m/%d/%y')} cannot be added (already expired or expiring immediately)."
+    return False, None, f"❌ Entry date is too old. A {entry_type} entry for {specified_date.strftime('%m/%d/%y')} cannot be added (already expired or expiring immediately)."
 
 def format_date_simple(date_str: str) -> str:
     """
@@ -659,7 +659,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     guild_data = get_guild_data(guild_id)
     
     if not guild_data["entries"]:
-        return ["≡ƒòè∩╕Å Both halls are currently empty."]
+        return ["🕊️ Both halls are currently empty."]
     
     # Separate entries by type
     shame_entries = {}
@@ -1050,7 +1050,7 @@ def parse_wordle_message(message: discord.Message, guild: discord.Guild):
 
         line = raw_line.strip()
 
-        if line.startswith("≡ƒææ"):
+        if line.startswith("👑"):
 
             ids, displays = parse_wordle_result_line(line)
 
@@ -1193,7 +1193,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
 
                     if log_channel:
                         await log_channel.send(
-                            f"≡ƒÿ¡ `{member.name}` is now a `{failure_role.name}`.",
+                            f"😭 `{member.name}` is now a `{failure_role.name}`.",
                             silent=True
                         )
 
@@ -1205,7 +1205,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
 
                     if log_channel:
                         await log_channel.send(
-                            f"≡ƒ¢á∩╕Å `{member.name}` is no longer a `{pro_role.name}`.",
+                            f"🛠️ `{member.name}` is no longer a `{pro_role.name}`.",
                             silent=True
                         )
 
@@ -1219,7 +1219,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
 
                     if log_channel:
                         await log_channel.send(
-                            f"≡ƒææ `{member.name}` is now a `{pro_role.name}`.",
+                            f"👑 `{member.name}` is now a `{pro_role.name}`.",
                             silent=True
                         )
 
@@ -1231,7 +1231,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
 
                     if log_channel:
                         await log_channel.send(
-                            f"≡ƒ¢á∩╕Å `{member.name}` is no longer a `{failure_role.name}`.",
+                            f"🛠️ `{member.name}` is no longer a `{failure_role.name}`.",
                             silent=True
                         )
 
@@ -1245,7 +1245,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
 
                     if log_channel:
                         await log_channel.send(
-                            f"≡ƒ¢á∩╕Å `{member.name}` is no longer a `{failure_role.name}`.",
+                            f"🛠️ `{member.name}` is no longer a `{failure_role.name}`.",
                             silent=True
                         )
 
@@ -1257,7 +1257,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
 
                     if log_channel:
                         await log_channel.send(
-                            f"≡ƒ¢á∩╕Å `{member.name}` is no longer a `{pro_role.name}`.",
+                            f"🛠️ `{member.name}` is no longer a `{pro_role.name}`.",
                             silent=True
                         )
 
@@ -1267,7 +1267,7 @@ async def synchronize_wordle_roles(guild: discord.Guild):
     if duplicate_found and log_channel:
 
         duplicate_warning = (
-            "ΓÜá∩╕Å Duplicate display names found in rare ping fail case, "
+            "⚠️ Duplicate display names found in rare ping fail case, "
             "some users may miss out on some roles."
         )
 
@@ -1380,7 +1380,7 @@ async def check_expired_votes():
                                 
                     if broadcast_channel:
                         remaining_votes = len(vote_data[guild_id_str][target_id_str])
-                        await broadcast_channel.send(f"ΓÅ▒∩╕Å Some votes for `{target_member.name}` have expired. ({remaining_votes}/{critical_amount})", silent=True)
+                        await broadcast_channel.send(f"⏱️ Some votes for `{target_member.name}` have expired. ({remaining_votes}/{critical_amount})", silent=True)
                         
                 if guild_id_str in vote_data and target_id_str in vote_data[guild_id_str]:
                     if not vote_data[guild_id_str][target_id_str]:
@@ -1393,7 +1393,7 @@ async def check_expired_votes():
     except Exception as e:
         print(f"Error in check_expired_votes background loop: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"≡ƒÜ¿ **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
+        await broadcast_error_log(f"🚨 **Background Loop Failure (`check_expired_votes`):**\n```python\n{tb}\n```")
 
 @tasks.loop(minutes=5)
 async def check_shame_credit_expiry():
@@ -1411,7 +1411,7 @@ async def check_shame_credit_expiry():
     except Exception as e:
         print(f"Error in check_shame_credit_expiry background loop: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"≡ƒÜ¿ **Background Loop Failure (`check_shame_credit_expiry`):**\n```python\n{tb}\n```")
+        await broadcast_error_log(f"🚨 **Background Loop Failure (`check_shame_credit_expiry`):**\n```python\n{tb}\n```")
 
 @check_shame_credit_expiry.before_loop
 async def before_check_shame_credit_expiry():
@@ -1455,7 +1455,7 @@ async def synchronize_active_member_roles():
                     # A failed history scan means our desired-state calculation
                     # is incomplete. Abort before making ANY role changes.
                     print(
-                        f"≡ƒ¢æ Aborting Active Member synchronization for "
+                        f"🛑 Aborting Active Member synchronization for "
                         f"{guild.name}: failed to scan #{channel.name}: {e}"
                     )
                     return
@@ -1514,7 +1514,7 @@ async def synchronize_active_member_roles():
                         # Abort immediately. Do not continue issuing role
                         # requests after a failed role operation.
                         print(
-                            f"≡ƒ¢æ Aborting Active Member synchronization for "
+                            f"🛑 Aborting Active Member synchronization for "
                             f"{guild.name}: failed to add role to "
                             f"{member.name}: {e}"
                         )
@@ -1523,14 +1523,14 @@ async def synchronize_active_member_roles():
                     if broadcast_channel:
                         try:
                             await broadcast_channel.send(
-                                f"≡ƒôê `{member.name}` has been assigned "
+                                f"📈 `{member.name}` has been assigned "
                                 f"the `{role.name}` role due to meeting "
                                 f"the activity threshold!",
                                 silent=True
                             )
                         except Exception as e:
                             print(
-                                f"ΓÜá∩╕Å Failed to send Active Member "
+                                f"⚠️ Failed to send Active Member "
                                 f"notification for {member.name}: {e}"
                             )
 
@@ -1548,7 +1548,7 @@ async def synchronize_active_member_roles():
                         # Abort immediately. Do not continue issuing role
                         # requests after a failed role operation.
                         print(
-                            f"≡ƒ¢æ Aborting Active Member synchronization for "
+                            f"🛑 Aborting Active Member synchronization for "
                             f"{guild.name}: failed to remove role from "
                             f"{member.name}: {e}"
                         )
@@ -1557,13 +1557,13 @@ async def synchronize_active_member_roles():
                     if broadcast_channel:
                         try:
                             await broadcast_channel.send(
-                                f"≡ƒôë `{member.name}` lost the "
+                                f"📉 `{member.name}` lost the "
                                 f"`{role.name}` role due to inactivity.",
                                 silent=True
                             )
                         except Exception as e:
                             print(
-                                f"ΓÜá∩╕Å Failed to send Active Member "
+                                f"⚠️ Failed to send Active Member "
                                 f"notification for {member.name}: {e}"
                             )
 
@@ -1583,7 +1583,7 @@ async def synchronize_active_member_roles():
         )
 
         await broadcast_error_log(
-            f"≡ƒÜ¿ **Background Task Loop Failure "
+            f"🚨 **Background Task Loop Failure "
             f"(`manage_active_roles_loop`):**\n"
             f"```python\n{tb}\n```"
         )
@@ -1595,7 +1595,7 @@ async def synchronize_active_member_roles():
 async def global_interaction_check(interaction: discord.Interaction) -> bool:
     # 1. Existing DM validation logic
     if interaction.guild is None and interaction.command and interaction.command.name != "info":
-        await interaction.response.send_message("Γ¥î This command can only be used in servers.", ephemeral=True)
+        await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
         return False
 
     # 2. Dynamic Rate Limiting Engine
@@ -1677,7 +1677,7 @@ async def wordle_autorole_loop():
         )
 
         await broadcast_error_log(
-            f"≡ƒÜ¿ **Background Task Failure (`wordle_autorole_loop`)**\n"
+            f"🚨 **Background Task Failure (`wordle_autorole_loop`)**\n"
             f"```python\n{tb}\n```"
         )
 
@@ -1742,15 +1742,15 @@ async def on_ready():
                     raise
     except Exception as e:
         print(f"Failed to sync application tree parameters: {e}")
-        await broadcast_error_log(f"ΓÜá∩╕Å **Command Sync Failed**: {e}")
+        await broadcast_error_log(f"⚠️ **Command Sync Failed**: {e}")
         
-    await broadcast_error_log("≡ƒƒó **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
+    await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
 
 @bot.tree.command(name="info", description="Display configuration settings and statistics parameters.")
 async def info(interaction: discord.Interaction):
     if interaction.guild is None:
         response_text = (
-            "Γä╣∩╕Å **Global Bot Status Summary**\n"
+            "ℹ️ **Global Bot Status Summary**\n"
             f"Version: {BOT_VERSION}\n\n"
             "For more detailed information for a specific server, use this same command in that specific server."
         )
@@ -1758,12 +1758,12 @@ async def info(interaction: discord.Interaction):
         return
 
     if is_command_disabled(interaction.guild_id, "info"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -1847,30 +1847,30 @@ async def create_entry(
     date: str = None
 ):
     if is_command_disabled(interaction.guild_id, "create_entry"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
     
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î You don't have permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     # Convert user string to ID and name
     try:
         user_id, username = await member_or_user_id_transformer(interaction, user)
     except app_commands.BadArgument as e:
-        await interaction.response.send_message(f"Γ¥î {str(e)}", ephemeral=True)
+        await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
         return
 
     # Check if user is a bot (only if they're in the guild)
     guild = interaction.guild
     member = guild.get_member(user_id) if guild else None
     if member and member.bot:
-        await interaction.response.send_message("Γ¥î You cannot nominate a bot.", ephemeral=True)
+        await interaction.response.send_message("❌ You cannot nominate a bot.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -1898,7 +1898,7 @@ async def create_entry(
             
             entry_date_str = adjusted_date.isoformat()
         except (ValueError, AttributeError) as e:
-            await interaction.response.send_message(f"Γ¥î Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
     else:
         # Default to current Pacific time, no adjustment
@@ -1939,23 +1939,23 @@ async def create_entry(
             except discord.Forbidden:
                 pass
     
-    await interaction.response.send_message(f"Γ£à Created entry #{entry_id}", ephemeral=True)
+    await interaction.response.send_message(f"✅ Created entry #{entry_id}", ephemeral=True)
 
 @bot.tree.command(name="delete_entry", description="Delete a Hall of Shame/Credit entry by ID")
 @app_commands.describe(id="Entry ID to delete")
 @app_commands.guild_only()
 async def delete_entry(interaction: discord.Interaction, id: int):
     if is_command_disabled(interaction.guild_id, "delete_entry"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î You don't have permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -1965,7 +1965,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 
     entry_id_str = str(id)
     if entry_id_str not in guild_data["entries"]:
-        await interaction.response.send_message("Γ¥î Entry ID not found.", ephemeral=True)
+        await interaction.response.send_message("❌ Entry ID not found.", ephemeral=True)
         return
 
     entry = guild_data["entries"][entry_id_str]
@@ -1988,7 +1988,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
             except discord.Forbidden:
                 pass
 
-    await interaction.response.send_message(f"Γ£à Deleted entry #{entry_id_str}", ephemeral=True)
+    await interaction.response.send_message(f"✅ Deleted entry #{entry_id_str}", ephemeral=True)
 
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
@@ -2012,21 +2012,21 @@ async def change_entry(
     date: str = None
 ):
     if is_command_disabled(interaction.guild_id, "change_entry"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
     
     # At least one change must be specified
     if not any([user, type, reason, date]):
-        await interaction.response.send_message("Γ¥î You must specify at least one field to change (user, type, reason, or date).", ephemeral=True)
+        await interaction.response.send_message("❌ You must specify at least one field to change (user, type, reason, or date).", ephemeral=True)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î You don't have permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
     # Convert user string to ID and name if provided
@@ -2038,10 +2038,10 @@ async def change_entry(
             # Check if user is a bot (only if they're in the guild)
             member = interaction.guild.get_member(user_id) if interaction.guild else None
             if member and member.bot:
-                await interaction.response.send_message("Γ¥î You cannot assign a bot.", ephemeral=True)
+                await interaction.response.send_message("❌ You cannot assign a bot.", ephemeral=True)
                 return
         except app_commands.BadArgument as e:
-            await interaction.response.send_message(f"Γ¥î {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
             return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2051,7 +2051,7 @@ async def change_entry(
 
     entry_id_str = str(id)
     if entry_id_str not in guild_data["entries"]:
-        await interaction.response.send_message("Γ¥î Entry ID not found.", ephemeral=True)
+        await interaction.response.send_message("❌ Entry ID not found.", ephemeral=True)
         return
 
     old_entry = dict(guild_data["entries"][entry_id_str])
@@ -2089,7 +2089,7 @@ async def change_entry(
             
             new_entry["date"] = adjusted_date.isoformat()
         except (ValueError, AttributeError) as e:
-            await interaction.response.send_message(f"Γ¥î Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
     elif type:
         # If type is being changed but date is not, validate existing date against new type
@@ -2121,7 +2121,7 @@ async def change_entry(
             except discord.Forbidden:
                 pass
 
-    await interaction.response.send_message(f"Γ£à Updated entry #{entry_id_str}", ephemeral=True)
+    await interaction.response.send_message(f"✅ Updated entry #{entry_id_str}", ephemeral=True)
 
 # /list_my_shame and /list_all_shame removed in v1.9.0
 
@@ -2130,7 +2130,7 @@ async def change_entry(
 @app_commands.guild_only()
 async def vote(interaction: discord.Interaction, user: discord.Member, anonymous: bool = True):
     if is_command_disabled(interaction.guild_id, "votekick"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
     await interaction.response.defer(ephemeral=True)
@@ -2150,7 +2150,7 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.followup.send(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.")
+        await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
         return
 
     guild_vote_data = get_vote_data(interaction.guild_id)
@@ -2160,19 +2160,19 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
     if user.bot:
-        await interaction.followup.send("Γ¥î You cannot vote to kick a bot.")
+        await interaction.followup.send("❌ You cannot vote to kick a bot.")
         return
 
     if user.id == interaction.user.id:
-        await interaction.followup.send("Γ¥î You cannot vote to kick yourself.")
+        await interaction.followup.send("❌ You cannot vote to kick yourself.")
         return
 
     if user.guild_permissions.administrator or user.id == interaction.guild.owner_id:
-        await interaction.followup.send("Γ¥î You cannot vote to kick the server owner or an administrator.")
+        await interaction.followup.send("❌ You cannot vote to kick the server owner or an administrator.")
         return
         
     if user.top_role >= interaction.guild.me.top_role:
-        await interaction.followup.send("Γ¥î I can't kick that person. Please ask a moderator to move my role higher.")
+        await interaction.followup.send("❌ I can't kick that person. Please ask a moderator to move my role higher.")
         return
 
     target_id_str = str(user.id)
@@ -2184,11 +2184,11 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     for target_id, voters in guild_vote_data.items():
         if voter_id_str in voters:
             if target_id == target_id_str:
-                await interaction.followup.send(f"Γ¥î You have already casted a vote for {user.name}.")
+                await interaction.followup.send(f"❌ You have already casted a vote for {user.name}.")
             else:
                 target_member = interaction.guild.get_member(int(target_id))
                 target_name = target_member.name if target_member else f"Unknown ({target_id})"
-                await interaction.followup.send(f"Γ¥î You have already casted a vote for {target_name}. Please remove your vote and recast it.")
+                await interaction.followup.send(f"❌ You have already casted a vote for {target_name}. Please remove your vote and recast it.")
             return
 
     if target_id_str not in guild_vote_data:
@@ -2202,13 +2202,13 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     save_vote_data()
 
     current_votes = len(guild_vote_data[target_id_str])
-    await interaction.followup.send(f"Γ£à Your vote has been counted for {user.name} ({current_votes}/{critical_amount}).")
+    await interaction.followup.send(f"✅ Your vote has been counted for {user.name} ({current_votes}/{critical_amount}).")
     
     # Broadcast to the channel
     if anonymous:
-        await interaction.channel.send(f"≡ƒƒá Someone voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
+        await interaction.channel.send(f"🟠 Someone voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
     else:
-        await interaction.channel.send(f"≡ƒƒá `{interaction.user.name}` voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
+        await interaction.channel.send(f"🟠 `{interaction.user.name}` voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
 
     if current_votes >= critical_amount:
         del guild_vote_data[target_id_str]
@@ -2219,7 +2219,7 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
         try:
             if ban_duration_days > 0:
                 await interaction.guild.ban(user, delete_message_days=0, reason=f"Vote to kick - reached critical amount ({current_votes}/{critical_amount})")
-                await interaction.channel.send(f"≡ƒÜ¿ **{user.name}** has been banned for {ban_duration_days} days due to reaching the critical vote threshold!", silent=True)
+                await interaction.channel.send(f"🚨 **{user.name}** has been banned for {ban_duration_days} days due to reaching the critical vote threshold!", silent=True)
                 
                 # Setup auto-unban
                 async def scheduled_unban_callback():
@@ -2231,17 +2231,17 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
                 asyncio.create_task(scheduled_unban_callback())
             else:
                 await interaction.guild.kick(user, reason=f"Vote to kick - reached critical amount ({current_votes}/{critical_amount})")
-                await interaction.channel.send(f"≡ƒÜ¿ **{user.name}** has been kicked due to reaching the critical vote threshold!", silent=True)
+                await interaction.channel.send(f"🚨 **{user.name}** has been kicked due to reaching the critical vote threshold!", silent=True)
             
         except discord.Forbidden:
             action_type = f"banned for {ban_duration_days} days" if ban_duration_days > 0 else "kicked"
-            await interaction.channel.send(f"ΓÜá∩╕Å **{user.name}** should have been {action_type}, but I lack the required permissions.", silent=True)
+            await interaction.channel.send(f"⚠️ **{user.name}** should have been {action_type}, but I lack the required permissions.", silent=True)
 
 @bot.tree.command(name="unvote", description="Removes your vote.")
 @app_commands.guild_only()
 async def unvote(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "unvote"):
-        await interaction.response.send_message("Γ¥î This command is disabled.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled.", ephemeral=True)
         return
         
     guild_vote_data = get_vote_data(interaction.guild_id)
@@ -2271,7 +2271,7 @@ async def unvote(interaction: discord.Interaction):
         # Track unvote time
         last_unvote_time[interaction.guild_id] = datetime.now()
         
-        await interaction.response.send_message("Γ£à Your active vote has been successfully removed.", ephemeral=True)
+        await interaction.response.send_message("✅ Your active vote has been successfully removed.", ephemeral=True)
         
         # --- Broadcast Engine ---
         guild_data = get_guild_data(interaction.guild_id)
@@ -2294,26 +2294,26 @@ async def unvote(interaction: discord.Interaction):
             critical_amount = get_critical_amount(interaction.guild_id)
             
             if is_anon:
-                await broadcast_channel.send(f"ΓÜ¬ Someone withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
+                await broadcast_channel.send(f"⚪ Someone withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
             else:
-                await broadcast_channel.send(f"ΓÜ¬ `{interaction.user.name}` withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
+                await broadcast_channel.send(f"⚪ `{interaction.user.name}` withdrew their vote for {target_name} ({current_votes}/{critical_amount}).", silent=True)
     else:
-        await interaction.response.send_message("Γä╣∩╕Å You do not have any current casted votes.", ephemeral=True)
+        await interaction.response.send_message("ℹ️ You do not have any current casted votes.", ephemeral=True)
 
 @bot.tree.command(name="votedata", description="Gets information on what kick votes are out there.")
 @app_commands.guild_only()
 async def votedata(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "votedata"):
-        await interaction.response.send_message("Γ¥î This command is disabled.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled.", ephemeral=True)
         return
 
     guild_vote_data = get_vote_data(interaction.guild_id)
     if not guild_vote_data:
-        await interaction.response.send_message("≡ƒòè∩╕Å There are currently no active kick votes in this server.")
+        await interaction.response.send_message("🕊️ There are currently no active kick votes in this server.")
         return
 
     critical_amount = get_critical_amount(interaction.guild_id)
-    lines = [f"≡ƒù│∩╕Å **Active Vote Data (Critical Amount: {critical_amount}):**\n"]
+    lines = [f"🗳️ **Active Vote Data (Critical Amount: {critical_amount}):**\n"]
     
     for target_id_str, voters_dict in guild_vote_data.items():
         member = interaction.guild.get_member(int(target_id_str))
@@ -2343,7 +2343,7 @@ async def votedata(interaction: discord.Interaction):
                 combined_voters.append(f"Anonymous x{anon_count}" if anon_count > 1 else "Anonymous")
             voters_string = f" (Voted by: {', '.join(combined_voters)})"
             
-        lines.append(f"ΓÇó **{name}**: {len(voters_dict)} vote(s){voters_string}")
+        lines.append(f"• **{name}**: {len(voters_dict)} vote(s){voters_string}")
         
     await interaction.response.send_message("\n".join(lines))
 
@@ -2351,20 +2351,20 @@ async def votedata(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def cooldown(interaction: discord.Interaction, seconds: int):
     if is_command_disabled(interaction.guild_id, "config_cooldown"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î You need Manage Server permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
 
     if seconds < 0 or seconds > 30:
-        await interaction.response.send_message("Γ¥î Cooldown must be between 0 and 30 seconds.", ephemeral=True)
+        await interaction.response.send_message("❌ Cooldown must be between 0 and 30 seconds.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2374,30 +2374,30 @@ async def cooldown(interaction: discord.Interaction, seconds: int):
     if interaction.guild_id in cooldowns:
         cooldowns[interaction.guild_id].clear()
 
-    await interaction.response.send_message(f"ΓÅ▒∩╕Å **Cooldown Threshold Synchronized:** Global command throttle adjusted to `{seconds}s` for this guild context.")
+    await interaction.response.send_message(f"⏱️ **Cooldown Threshold Synchronized:** Global command throttle adjusted to `{seconds}s` for this guild context.")
 
 # --- MANAGER ROLE SETUP ---
 @bot.tree.command(name="set_manager_role", description="Sets the manager role.")
 @app_commands.guild_only()
 async def set_manager_role(interaction: discord.Interaction, role: discord.Role):
     if not is_moderator(interaction):
-        await interaction.response.send_message("Γ¥î Only Moderators can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Moderators can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["manager_role"] = role.id
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message(f"Γ£à Manager role set to {role.mention}")
+    await interaction.response.send_message(f"✅ Manager role set to {role.mention}")
 
 @bot.tree.command(name="reset_manager_role", description="Resets the manager role.")
 @app_commands.guild_only()
 async def reset_manager_role(interaction: discord.Interaction):
     if not is_moderator(interaction):
-        await interaction.response.send_message("Γ¥î Only Moderators can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Moderators can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["manager_role"] = None
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("Γ£à Manager role reset. Only Moderators can manage the bot now.")
+    await interaction.response.send_message("✅ Manager role reset. Only Moderators can manage the bot now.")
 
 # --- SHAME CONFIG ---
 @bot.tree.command(name="set_shame_channel", description="Sets the broadcast channel for Hall of Shame/Credit")
@@ -2405,48 +2405,48 @@ async def reset_manager_role(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def set_shame_channel(interaction: discord.Interaction, broadcast_channel: discord.TextChannel):
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î Only Managers can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["shame_channel"] = broadcast_channel.id
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message(f"Γ£à Shame broadcast channel set to {broadcast_channel.mention}")
+    await interaction.response.send_message(f"✅ Shame broadcast channel set to {broadcast_channel.mention}")
 
 @bot.tree.command(name="reset_shame_channel", description="Resets the Hall of Shame/Credit broadcast channel")
 @app_commands.guild_only()
 async def reset_shame_channel(interaction: discord.Interaction):
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î Only Managers can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["shame_channel"] = None
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("Γ£à Shame broadcast channel reset.")
+    await interaction.response.send_message("✅ Shame broadcast channel reset.")
 
 # --- VOTEKICK CONFIG ---
 @bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
 @app_commands.guild_only()
 async def votekick_config_set(interaction: discord.Interaction, broadcast_channel: discord.TextChannel = None, ban_duration: int = None):
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î Only Managers can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     if broadcast_channel: guild_data["votekick_broadcast_channel"] = broadcast_channel.id
     if ban_duration is not None: guild_data["votekick_ban_duration"] = max(1, ban_duration)
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("Γ£à Votekick configuration updated.")
+    await interaction.response.send_message("✅ Votekick configuration updated.")
 
 @bot.tree.command(name="votekick_config_reset", description="Resets the votekick feature configuration.")
 @app_commands.guild_only()
 async def votekick_config_reset(interaction: discord.Interaction):
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î Only Managers can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["votekick_broadcast_channel"] = None
     guild_data["votekick_ban_duration"] = 7
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("Γ£à Votekick configuration reset.")
+    await interaction.response.send_message("✅ Votekick configuration reset.")
 
 # --- ACTIVITY CONFIG ---
 @bot.tree.command(name="activity_config_set", description="Sets active member role, activity window, threshold, and broadcast channel.")
@@ -2465,7 +2465,7 @@ async def activity_config_set(
     broadcast_channel: discord.TextChannel = None
 ):
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î Only Managers can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
         
     guild_data = get_guild_data(interaction.guild_id)
@@ -2476,19 +2476,19 @@ async def activity_config_set(
     # ==========================================
     if role is not None and role.id != current_role_id:
         if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("Γ¥î **Security Lock:** You must natively possess the 'Manage Roles' permission to configure a new active role.", ephemeral=True)
+            await interaction.response.send_message("❌ **Security Lock:** You must natively possess the 'Manage Roles' permission to configure a new active role.", ephemeral=True)
             return
         if not interaction.guild.me.guild_permissions.manage_roles:
-            await interaction.response.send_message("Γ¥î **Security Lock:** I do not have the 'Manage Roles' permission required to assign this role.", ephemeral=True)
+            await interaction.response.send_message("❌ **Security Lock:** I do not have the 'Manage Roles' permission required to assign this role.", ephemeral=True)
             return
         if interaction.user.id != interaction.guild.owner_id and interaction.user.top_role <= role:
-            await interaction.response.send_message("Γ¥î **Security Lock:** Your highest role must be strictly above the role you are trying to configure.", ephemeral=True)
+            await interaction.response.send_message("❌ **Security Lock:** Your highest role must be strictly above the role you are trying to configure.", ephemeral=True)
             return
         if interaction.guild.me.top_role <= role:
-            await interaction.response.send_message("Γ¥î **Security Lock:** My highest role must be strictly above the role you are trying to configure.", ephemeral=True)
+            await interaction.response.send_message("❌ **Security Lock:** My highest role must be strictly above the role you are trying to configure.", ephemeral=True)
             return
         if role.permissions.value != 0:
-            await interaction.response.send_message("Γ¥î **Security Lock:** The target role must have absolutely NO server-level permissions.", ephemeral=True)
+            await interaction.response.send_message("❌ **Security Lock:** The target role must have absolutely NO server-level permissions.", ephemeral=True)
             return
     # ==========================================
 
@@ -2506,7 +2506,7 @@ async def activity_config_set(
     await synchronize_active_member_roles()  # Trigger instant sync
 
     await interaction.followup.send(
-        "Γ£à Activity configuration updated.",
+        "✅ Activity configuration updated.",
         ephemeral=True
     )
 
@@ -2514,7 +2514,7 @@ async def activity_config_set(
 @app_commands.guild_only()
 async def activity_config_reset(interaction: discord.Interaction):
     if not is_manager(interaction):
-        await interaction.response.send_message("Γ¥î Only Managers can use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["active_member_role"] = None
@@ -2522,30 +2522,30 @@ async def activity_config_reset(interaction: discord.Interaction):
     guild_data["activity_message_threshold"] = 1
     guild_data["activity_broadcast_channel"] = None
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("Γ£à Activity configuration reset.")
+    await interaction.response.send_message("✅ Activity configuration reset.")
 
 @bot.tree.command(name="disable", description="Disables a command, stopping people in your server from using it.")
 @app_commands.guild_only()
 async def disable(interaction: discord.Interaction, command: str):
     if is_command_disabled(interaction.guild_id, "command_restrict"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     if not is_moderator(interaction):
-        await interaction.response.send_message("Γ¥î You need Manage Server permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
 
     if not is_valid_command(command):
-        await interaction.response.send_message(f"Γ¥î The command `{command}` does not exist.", ephemeral=True)
+        await interaction.response.send_message(f"❌ The command `{command}` does not exist.", ephemeral=True)
         return
 
     if command.lower() in ["command_restrict", "command_unrestrict", "info"]:
-        await interaction.response.send_message(f"Γ¥î Core engine control primitive `{command}` cannot be altered.", ephemeral=True)
+        await interaction.response.send_message(f"❌ Core engine control primitive `{command}` cannot be altered.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2556,33 +2556,33 @@ async def disable(interaction: discord.Interaction, command: str):
     disabled_commands = guild_data.get("disabled_commands", [])
 
     if command in disabled_commands:
-        await interaction.response.send_message(f"Γä╣∩╕Å Command `/{command}` is already under active server-side execution bans.", ephemeral=True)
+        await interaction.response.send_message(f"ℹ️ Command `/{command}` is already under active server-side execution bans.", ephemeral=True)
         return
 
     disabled_commands.append(command)
     guild_data["disabled_commands"] = disabled_commands
     update_guild_data(interaction.guild_id, guild_data)
 
-    await interaction.response.send_message(f"≡ƒöÆ **Access Restriction Imposed:** `/{command}` has been completely disabled for standard members within this guild.")
+    await interaction.response.send_message(f"🔒 **Access Restriction Imposed:** `/{command}` has been completely disabled for standard members within this guild.")
 
 @bot.tree.command(name="enable", description="Enables a command, allowing people in your server to use it.")
 @app_commands.guild_only()
 async def enable(interaction: discord.Interaction, command: str):
     if is_command_disabled(interaction.guild_id, "command_unrestrict"):
-        await interaction.response.send_message("Γ¥î This command is disabled in this server.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"ΓÅ▒∩╕Å You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
         return
 
     if not is_moderator(interaction):
-        await interaction.response.send_message("Γ¥î You need Manage Server permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You need Manage Server permission to use this command.", ephemeral=True)
         return
 
     if not is_valid_command(command):
-        await interaction.response.send_message(f"Γ¥î The command `{command}` does not exist.", ephemeral=True)
+        await interaction.response.send_message(f"❌ The command `{command}` does not exist.", ephemeral=True)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2593,14 +2593,14 @@ async def enable(interaction: discord.Interaction, command: str):
     disabled_commands = guild_data.get("disabled_commands", [])
 
     if command not in disabled_commands:
-        await interaction.response.send_message(f"Γä╣∩╕Å Command `/{command}` is already running under normal inherited accessibility settings.", ephemeral=True)
+        await interaction.response.send_message(f"ℹ️ Command `/{command}` is already running under normal inherited accessibility settings.", ephemeral=True)
         return
 
     disabled_commands.remove(command)
     guild_data["disabled_commands"] = disabled_commands
     update_guild_data(interaction.guild_id, guild_data)
 
-    await interaction.response.send_message(f"≡ƒöô **Access Restriction Lifted:** `/{command}` is now available for registration and use by normal endpoints again.")
+    await interaction.response.send_message(f"🔓 **Access Restriction Lifted:** `/{command}` is now available for registration and use by normal endpoints again.")
 
 @wordle_autorole_group.command(
     name="on",
@@ -2613,7 +2613,7 @@ async def wordle_autorole_on(
     if not is_moderator(interaction):
 
         await interaction.response.send_message(
-            "Γ¥î You do not have permission to use this command.",
+            "❌ You do not have permission to use this command.",
             ephemeral=True
         )
         return
@@ -2622,7 +2622,7 @@ async def wordle_autorole_on(
     if not is_wordle_command_channel(interaction):
 
         await interaction.response.send_message(
-            "Γ¥î This command can only be used in <#1437902486328447067>.",
+            "❌ This command can only be used in <#1437902486328447067>.",
             ephemeral=True
         )
         return
@@ -2636,7 +2636,7 @@ async def wordle_autorole_on(
 
 
     await interaction.response.send_message(
-        "Γ£à Wordle auto role scanning is now ON."
+        "✅ Wordle auto role scanning is now ON."
     )
 
 @wordle_autorole_group.command(
@@ -2650,7 +2650,7 @@ async def wordle_autorole_off(
     if not is_moderator(interaction):
 
         await interaction.response.send_message(
-            "Γ¥î You do not have permission to use this command.",
+            "❌ You do not have permission to use this command.",
             ephemeral=True
         )
         return
@@ -2659,7 +2659,7 @@ async def wordle_autorole_off(
     if not is_wordle_command_channel(interaction):
 
         await interaction.response.send_message(
-            "Γ¥î This command can only be used in <#1437902486328447067>.",
+            "❌ This command can only be used in <#1437902486328447067>.",
             ephemeral=True
         )
         return
@@ -2672,7 +2672,7 @@ async def wordle_autorole_off(
     save_shame_data(guild_data)
 
     await interaction.response.send_message(
-        "Γ£à Wordle auto role scanning is now OFF."
+        "✅ Wordle auto role scanning is now OFF."
     )
 
 @wordle_autorole_group.command(
@@ -2686,7 +2686,7 @@ async def wordle_autorole_scan(
     if not is_moderator(interaction):
 
         await interaction.response.send_message(
-            "Γ¥î You do not have permission to use this command.",
+            "❌ You do not have permission to use this command.",
             ephemeral=True
         )
         return
@@ -2695,7 +2695,7 @@ async def wordle_autorole_scan(
     if not is_wordle_command_channel(interaction):
 
         await interaction.response.send_message(
-            "Γ¥î This command can only be used in <#1437902486328447067>.",
+            "❌ This command can only be used in <#1437902486328447067>.",
             ephemeral=True
         )
         return
@@ -2712,7 +2712,7 @@ async def wordle_autorole_scan(
 
 
     await interaction.followup.send(
-        "≡ƒöÄ #general was scanned and Wordle roles have been automatically updated.",
+        "🔎 #general was scanned and Wordle roles have been automatically updated.",
         ephemeral=True
     )    
 
@@ -2731,18 +2731,18 @@ if __name__ == "__main__":
             except discord.errors.HTTPException as e:
                 if e.status == 429:  # Rate limit error
                     if attempt < max_retries - 1:
-                        print(f"ΓÜá∩╕Å Rate limited by Discord API. Waiting {retry_delay} seconds before retry {attempt + 2}/{max_retries}...")
+                        print(f"⚠️ Rate limited by Discord API. Waiting {retry_delay} seconds before retry {attempt + 2}/{max_retries}...")
                         import time
                         time.sleep(retry_delay)
                         retry_delay *= 2  # Exponential backoff
                     else:
-                        print(f"≡ƒÜ¿ Failed to connect after {max_retries} attempts due to rate limiting.")
+                        print(f"🚨 Failed to connect after {max_retries} attempts due to rate limiting.")
                         raise
                 else:
                     raise  # Re-raise if not a rate limit error
             except Exception as e:
-                print(f"≡ƒÜ¿ Unexpected error during bot startup: {e}")
+                print(f"🚨 Unexpected error during bot startup: {e}")
                 raise
     else:
-        print("≡ƒÜ¿ Critical Setup Error: DISCORD_TOKEN environmental string injection variable missing!")
+        print("🚨 Critical Setup Error: DISCORD_TOKEN environmental string injection variable missing!")
         
