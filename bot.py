@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.8"
+BOT_VERSION = "1.9.9"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -738,7 +738,11 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             count = len(entries_list)
             
             shame_lines.append(f"")
-            shame_lines.append(f"__{display_name} - {count}__")
+            # Ping user if they're outside the server
+            if member:
+                shame_lines.append(f"__{display_name} - {count}__")
+            else:
+                shame_lines.append(f"__<@{user_id}> - {count}__")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -761,7 +765,11 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             count = len(entries_list)
             
             credit_lines.append(f"")
-            credit_lines.append(f"__{display_name} - {count}__")
+            # Ping user if they're outside the server
+            if member:
+                credit_lines.append(f"__{display_name} - {count}__")
+            else:
+                credit_lines.append(f"__<@{user_id}> - {count}__")
             
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
@@ -797,8 +805,8 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     type_name = "Shame" if entry_type == "shame" else "Credit"
     formatted_date = format_date_simple(date_str)
     
-    # Build user reference (mention if member, otherwise username)
-    user_ref = user.mention if user else f"@{username}"
+    # Build user reference (mention if member, otherwise ping via User ID)
+    user_ref = user.mention if user else f"<@{entry_id}>"
     
     broadcast_msg = (
         f"{interaction.user.mention} nominated {user_ref} for the Hall of {type_name}!!\n"
