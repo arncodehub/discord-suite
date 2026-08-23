@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.12"
+BOT_VERSION = "1.9.13"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -834,7 +834,8 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     user_ref = user_aliases.get(int(username) if isinstance(username, str) and username.isdigit() else user.id, username)
     
     broadcast_msg = (
-        f"{interaction.user.mention} nominated {user_ref} for the Hall of {type_name}!!\n"
+        f"📝 New nomination for the Hall of {type_name}!!\n"
+        f"User: {user_ref}\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
@@ -879,7 +880,7 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     user_ref = user_aliases.get(user_id, username)
     
     broadcast_msg = (
-        f"{interaction.user.mention} deleted {type_name} entry #{entry_id} which was for {user_ref}\n"
+        f"🗑️ Deleted {type_name} entry #{entry_id} for {user_ref}\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}"
     )
@@ -933,7 +934,7 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     
     unchanged_str = ", ".join([k.replace("_", " ").title() for k in unchanged if k != "user_id"])
     
-    broadcast_msg = f"{interaction.user.mention} changed entry #{entry_id}\n"
+    broadcast_msg = f"✏️ Changed entry #{entry_id}\n"
     broadcast_msg += "\n".join(changes)
     if unchanged_str:
         broadcast_msg += f"\nUnchanged: {unchanged_str}"
