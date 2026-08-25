@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.16"
+BOT_VERSION = "1.9.17"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -347,10 +347,12 @@ def save_shame_data(data):
         with open(tmp_file, 'w') as f:
             json.dump(data, f, indent=4)
         os.replace(tmp_file, DATA_FILE)
+        return True
     except Exception as e:
         print(f"Error saving shame data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_shame_data`)** — Disk likely full!\n```python\n{tb}\n```"))
+        return False
 
 def get_guild_data(guild_id):
     data = load_shame_data()
@@ -1752,7 +1754,8 @@ async def on_ready():
     if not wordle_autorole_loop.is_running():
         wordle_autorole_loop.start()
 
-    bot.tree.add_command(wordle_group)
+    if not any(cmd.name == "wordle" for cmd in bot.tree.get_commands()):
+        bot.tree.add_command(wordle_group)
 
     try:
         # Add retry logic for command sync to handle rate limits
@@ -1945,7 +1948,7 @@ async def create_entry(
     # CRITICAL: Reload guild_data after get_next_entry_id updates it
     guild_data = get_guild_data(interaction.guild_id)
     
-    # Create entry
+    # Save data and check if disk is full
     guild_data["entries"][str(entry_id)] = {
         "user_id": user_id,
         "username": username,
@@ -1954,13 +1957,15 @@ async def create_entry(
         "date": entry_date_str,
         "created_by": interaction.user.id
     }
-    update_guild_data(interaction.guild_id, guild_data)
     
-    # Broadcast (need to get member for mention if in guild, otherwise just use username)
+    if not update_guild_data_safe(interaction.guild_id, guild_data): # Or check save_shame_data directly
+        await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=True)
+        return
+
+    # If save succeeded, proceed with broadcast and non-ephemeral response
     target_member = interaction.guild.get_member(user_id) if interaction.guild else None
     await broadcast_entry_create(interaction, entry_id, target_member, entry_type, reason, entry_date_str, username)
     
-    # Send hall display
     hall_messages = build_hall_display(interaction.guild, interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
     if shame_channel_id:
@@ -1973,7 +1978,8 @@ async def create_entry(
             except discord.Forbidden:
                 pass
     
-    await interaction.response.send_message(f"✅ Created entry #{entry_id}", ephemeral=True)
+    # Successful response must NOT be ephemeral
+    await interaction.response.send_message(f"✅ Created entry #{entry_id}")
 
 @bot.tree.command(name="delete_entry", description="Delete a Hall of Shame/Credit entry by ID")
 @app_commands.describe(id="Entry ID to delete")
@@ -2008,7 +2014,11 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 
     entry = guild_data["entries"][entry_id_str]
     del guild_data["entries"][entry_id_str]
-    update_guild_data(interaction.guild_id, guild_data)
+    
+    # Check if save operation succeeds
+    if not update_guild_data(interaction.guild_id, guild_data):
+        await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=True)
+        return
     
     # Broadcast delete message
     await broadcast_entry_delete(interaction, id, entry)
@@ -2116,16 +2126,10 @@ async def change_entry(
     
     if date:
         try:
-            # Parse M/D/YY format and convert to Pacific timezone at 12 PM
             entry_date = parse_flexible_date(date)
-            
-            # Convert to Pacific timezone at 12 PM
             pacific_12pm = get_pacific_time().replace(hour=12, minute=0, second=0, microsecond=0)
-            # Use the specified date but in Pacific timezone
             entry_date_pacific = pacific_12pm.replace(month=entry_date.month, day=entry_date.day, year=entry_date.year)
             
-            # Validate and get adjusted datetime (12 PM or 11:59 PM Pacific)
-            # Use the new type if it was changed, otherwise use the existing type
             effective_type = new_entry.get("type", old_entry.get("type", "shame"))
             is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, effective_type)
             if not is_valid:
@@ -2137,18 +2141,20 @@ async def change_entry(
             await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
     elif type:
-        # If type is being changed but date is not, validate existing date against new type
         existing_date = datetime.fromisoformat(old_entry.get("date", datetime.now().isoformat()))
         effective_type = type.value
         is_valid, adjusted_date, error_msg = validate_entry_date(existing_date, effective_type)
         if not is_valid:
             await interaction.response.send_message(error_msg, ephemeral=True)
             return
-        # Update the date to the adjusted version if validation passed
         new_entry["date"] = adjusted_date.isoformat()
     
     guild_data["entries"][entry_id_str] = new_entry
-    update_guild_data(interaction.guild_id, guild_data)
+    
+    # Check if save operation succeeds
+    if not update_guild_data(interaction.guild_id, guild_data):
+        await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=True)
+        return
     
     # Broadcast edit message
     await broadcast_entry_edit(interaction, id, old_entry, new_entry)
