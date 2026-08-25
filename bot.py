@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.17"
+BOT_VERSION = "1.9.18"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -2048,9 +2048,9 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 )
 @app_commands.choices(
     user=[
-        app_commands.Choice(name="67", value="995165764594176010"),
-        app_commands.Choice(name="no longer an idiot", value="807087691522375681"),
-        app_commands.Choice(name="very speedy miner", value="1294395464803811452"),
+        app_commands.Choice(name="California StateRoute Highway #1", value="995165764594176010"),
+        app_commands.Choice(name="Code Station", value="807087691522375681"),
+        app_commands.Choice(name="MineSpeed", value="1294395464803811452"),
         app_commands.Choice(name="Airplane", value="1137904269664718948"),
         app_commands.Choice(name="Link's Siemens S700 LRV", value="838589314756902984"),
         app_commands.Choice(name="Snowy City", value="1191502706360205412"),
