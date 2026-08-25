@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.15"
+BOT_VERSION = "1.9.16"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1736,6 +1736,9 @@ async def on_ready():
         
     if not check_expired_votes.is_running():
         check_expired_votes.start()
+
+    if not check_shame_credit_expiry.is_running():
+        check_shame_credit_expiry.start()
 
     if not manage_active_roles_loop.is_running():
         manage_active_roles_loop.start()
