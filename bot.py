@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.18"
+BOT_VERSION = "1.9.19"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -48,9 +48,9 @@ WORDLE_SCAN_DAYS = 7
 # Aliases
 
 USER_ALIASES = {
-    995165764594176010: "67",
-    807087691522375681: "no longer an idiot",
-    1294395464803811452: "very speedy miner",
+    995165764594176010: "California StateRoute Highway #1",
+    807087691522375681: "Code Station",
+    1294395464803811452: "MineSpeed",
     1137904269664718948: "Airplane",
     838589314756902984: "Link's Siemens S700 LRV",
     1191502706360205412: "Snowy City",
@@ -80,14 +80,6 @@ last_unvote_time = {}
 # Track if initial message history sync has completed
 initial_sync_completed = False
 
-# --- New Globals for Rate Limiting ---
-RATE_LIMIT_FILE = "rate_limit.json"
-rate_limits_config = {}
-
-# Tracks timestamps to enforce cross-command rate limits
-# Format: {guild_id: {user_id: {command_name: datetime_object}}}
-command_timestamps = {}
-
 # Wordle groups
 wordle_group = app_commands.Group(
     name="wordle",
@@ -100,41 +92,6 @@ wordle_autorole_group = app_commands.Group(
     description="Manage automatic Wordle roles.",
     parent=wordle_group
 )
-
-def initialize_rate_limits():
-    """Loads and strictly validates the rate limits configuration."""
-    global rate_limits_config
-    
-    # Create file if it doesn't exist
-    if not os.path.exists(RATE_LIMIT_FILE):
-        with open(RATE_LIMIT_FILE, 'w') as f:
-            json.dump({}, f, indent=4)
-        print(f"Created {RATE_LIMIT_FILE} with default empty configuration.")
-        return
-
-    # Load file
-    with open(RATE_LIMIT_FILE, 'r') as f:
-        try:
-            rate_limits_config = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"CRITICAL ERROR: Failed to parse {RATE_LIMIT_FILE}. Invalid JSON format.\n{e}")
-            sys.exit(1)  # Halt program
-
-    # Validate schema
-    for cmd, config in rate_limits_config.items():
-        if not isinstance(config, dict):
-            print(f"CRITICAL ERROR: Config for '{cmd}' must be a JSON object.")
-            sys.exit(1)
-        
-        prev_cmd = config.get("previousCommand")
-        seconds = config.get("seconds")
-        
-        if not isinstance(prev_cmd, str):
-            print(f"CRITICAL ERROR: Rate limit for '{cmd}' requires 'previousCommand' to be a string.")
-            sys.exit(1)
-        if not isinstance(seconds, int) or seconds <= 0:
-            print(f"CRITICAL ERROR: Rate limit for '{cmd}' requires 'seconds' to be a whole number > 0.")
-            sys.exit(1)
 
 def refresh_critical_amount(guild_id):
     """Calculates and updates the cached critical vote threshold for a guild."""
@@ -366,7 +323,6 @@ def get_guild_data(guild_id):
             "entries": {},
             "disabled_commands": [],
             "activity_message_threshold": 1,
-            "wordle_autorole_enabled": False,
             "next_entry_id": 1,  # For persistent IDs
         }
         save_shame_data(data)
@@ -382,7 +338,7 @@ def get_all_data():
 def update_guild_data(guild_id, guild_data):
     data = load_shame_data()
     data[str(guild_id)] = guild_data
-    save_shame_data(data)
+    return save_shame_data(data)
 
 def load_vote_data():
     global vote_data
@@ -1626,46 +1582,6 @@ async def global_interaction_check(interaction: discord.Interaction) -> bool:
         await interaction.response.send_message("❌ This command can only be used in servers.", ephemeral=True)
         return False
 
-    # 2. Dynamic Rate Limiting Engine
-    if interaction.guild and interaction.command:
-        guild_id = interaction.guild_id
-        user_id = interaction.user.id
-        cmd_name = interaction.command.name
-
-        # Check if the triggered command has a configured rate limit
-        if cmd_name in rate_limits_config:
-            rule = rate_limits_config[cmd_name]
-            prev_cmd = rule["previousCommand"]
-            req_sec = rule["seconds"]
-            error_msg = rule.get("errorMessage")
-
-            # Did this user run the required previous command in this server?
-            if guild_id in command_timestamps and user_id in command_timestamps[guild_id]:
-                last_prev_cmd_time = command_timestamps[guild_id][user_id].get(prev_cmd)
-                
-                if last_prev_cmd_time:
-                    elapsed = (datetime.now() - last_prev_cmd_time).total_seconds()
-                    
-                    # Cut them off if they are moving too fast
-                    if elapsed < req_sec:
-                        remaining = req_sec - elapsed
-                        ready_time = int((datetime.now() + timedelta(seconds=remaining)).timestamp())
-                        
-                        response_text = f"Sorry, try again <t:{ready_time}:R>."
-                        if error_msg:
-                            response_text += f"\nNOTE: {error_msg}"
-                            
-                        await interaction.response.send_message(response_text, ephemeral=True)
-                        return False 
-        
-        # 3. Log the successful command execution timestamp
-        if guild_id not in command_timestamps:
-            command_timestamps[guild_id] = {}
-        if user_id not in command_timestamps[guild_id]:
-            command_timestamps[guild_id][user_id] = {}
-            
-        command_timestamps[guild_id][user_id][cmd_name] = datetime.now()
-
     return True
 
 @tasks.loop(minutes=10)
@@ -1868,9 +1784,9 @@ async def info(interaction: discord.Interaction):
 )
 @app_commands.choices(
     user=[
-        app_commands.Choice(name="67", value="995165764594176010"),
-        app_commands.Choice(name="no longer an idiot", value="807087691522375681"),
-        app_commands.Choice(name="very speedy miner", value="1294395464803811452"),
+        app_commands.Choice(name="California StateRoute Highway #1", value="995165764594176010"),
+        app_commands.Choice(name="Code Station", value="807087691522375681"),
+        app_commands.Choice(name="MineSpeed", value="1294395464803811452"),
         app_commands.Choice(name="Airplane", value="1137904269664718948"),
         app_commands.Choice(name="Link's Siemens S700 LRV", value="838589314756902984"),
         app_commands.Choice(name="Snowy City", value="1191502706360205412"),
@@ -1958,7 +1874,7 @@ async def create_entry(
         "created_by": interaction.user.id
     }
     
-    if not update_guild_data_safe(interaction.guild_id, guild_data): # Or check save_shame_data directly
+    if not update_guild_data(interaction.guild_id, guild_data): # Or check save_shame_data directly
         await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=True)
         return
 
@@ -2652,123 +2568,6 @@ async def enable(interaction: discord.Interaction, command: str):
     update_guild_data(interaction.guild_id, guild_data)
 
     await interaction.response.send_message(f"🔓 **Access Restriction Lifted:** `/{command}` is now available for registration and use by normal endpoints again.")
-
-@wordle_autorole_group.command(
-    name="on",
-    description="Enable automatic Wordle roles."
-)
-async def wordle_autorole_on(
-    interaction: discord.Interaction
-):
-
-    if not is_moderator(interaction):
-
-        await interaction.response.send_message(
-            "❌ You do not have permission to use this command.",
-            ephemeral=True
-        )
-        return
-
-
-    if not is_wordle_command_channel(interaction):
-
-        await interaction.response.send_message(
-            "❌ This command can only be used in <#1437902486328447067>.",
-            ephemeral=True
-        )
-        return
-
-
-    guild_data = get_guild_data(interaction.guild.id)
-
-    guild_data["wordle_autorole_enabled"] = True
-
-    save_shame_data()
-
-
-    await interaction.response.send_message(
-        "✅ Wordle auto role scanning is now ON."
-    )
-
-@wordle_autorole_group.command(
-    name="off",
-    description="Disable automatic Wordle roles."
-)
-async def wordle_autorole_off(
-    interaction: discord.Interaction
-):
-
-    if not is_moderator(interaction):
-
-        await interaction.response.send_message(
-            "❌ You do not have permission to use this command.",
-            ephemeral=True
-        )
-        return
-
-
-    if not is_wordle_command_channel(interaction):
-
-        await interaction.response.send_message(
-            "❌ This command can only be used in <#1437902486328447067>.",
-            ephemeral=True
-        )
-        return
-
-
-    guild_data = get_guild_data(interaction.guild.id)
-
-    guild_data["wordle_autorole_enabled"] = False
-
-    save_shame_data(guild_data)
-
-    await interaction.response.send_message(
-        "✅ Wordle auto role scanning is now OFF."
-    )
-
-@wordle_autorole_group.command(
-    name="scan",
-    description="Immediately scan recent Wordle results."
-)
-async def wordle_autorole_scan(
-    interaction: discord.Interaction
-):
-
-    if not is_moderator(interaction):
-
-        await interaction.response.send_message(
-            "❌ You do not have permission to use this command.",
-            ephemeral=True
-        )
-        return
-
-
-    if not is_wordle_command_channel(interaction):
-
-        await interaction.response.send_message(
-            "❌ This command can only be used in <#1437902486328447067>.",
-            ephemeral=True
-        )
-        return
-
-
-    await interaction.response.defer(
-        ephemeral=True
-    )
-
-
-    await synchronize_wordle_roles(
-        interaction.guild
-    )
-
-
-    await interaction.followup.send(
-        "🔎 #general was scanned and Wordle roles have been automatically updated.",
-        ephemeral=True
-    )    
-
-# Initialize this immediately
-initialize_rate_limits()
 
 if __name__ == "__main__":
     if TOKEN:
