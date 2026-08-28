@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.19"
+BOT_VERSION = "1.9.20"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -451,14 +451,10 @@ def get_next_entry_id(guild_id) -> int:
     return next_id
 
 def check_expired_entries(guild_id) -> list:
-    """
-    Removes expired entries and returns list of expired entry info for broadcasting.
-    Format: [{"id": id, "user_id": user_id, "username": username, "type": type, "reason": reason, "date": date}, ...]
-    """
+    """Finds expired entries without deleting them yet."""
     guild_data = get_guild_data(guild_id)
     current_time = datetime.now()
     expired_entries = []
-    entries_to_remove = []
     
     for entry_id, entry in list(guild_data["entries"].items()):
         entry_type = entry.get("type", "shame")
@@ -477,13 +473,6 @@ def check_expired_entries(guild_id) -> list:
                 "reason": entry.get("reason", "No reason provided"),
                 "date": entry["date"]
             })
-            entries_to_remove.append(entry_id)
-    
-    for entry_id in entries_to_remove:
-        del guild_data["entries"][entry_id]
-    
-    if expired_entries:
-        update_guild_data(guild_id, guild_data)
     
     return expired_entries
 
@@ -916,7 +905,7 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     user_ref = USER_ALIASES.get(user_id, username)
     
     expire_msg = (
-        f"A {type_name.lower()} entry for {user_ref} has expired!\n"
+        f"⌛ A {type_name.lower()} entry for {user_ref} has expired!\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
@@ -1385,13 +1374,28 @@ async def check_shame_credit_expiry():
     try:
         for guild in bot.guilds:
             expired_entries = check_expired_entries(guild.id)
+            if not expired_entries:
+                continue
+                
+            guild_data = get_guild_data(guild.id)
+            entries_removed = False
             
             for entry_info in expired_entries:
                 try:
+                    # Attempt the broadcast first
                     await broadcast_entry_expire(guild, guild.id, entry_info["id"], entry_info)
+                    
+                    # Only delete if the broadcast didn't trigger a network crash
+                    entry_id_str = str(entry_info["id"])
+                    if entry_id_str in guild_data["entries"]:
+                        del guild_data["entries"][entry_id_str]
+                        entries_removed = True
                 except Exception as e:
                     print(f"Error broadcasting expiry for entry {entry_info['id']}: {e}")
                     
+            if entries_removed:
+                update_guild_data(guild.id, guild_data)
+                
     except Exception as e:
         print(f"Error in check_shame_credit_expiry background loop: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
