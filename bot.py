@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.20"
+BOT_VERSION = "1.9.21"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -916,9 +916,6 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
         if channel and channel.permissions_for(guild.me).send_messages:
             try:
                 await channel.send(expire_msg)
-                # Send updated hall display
-                hall_messages = build_hall_display(guild, guild_id)
-                await broadcast_hall_to_channel(channel, hall_messages)
                 return True
             except discord.Forbidden:
                 pass
@@ -1376,30 +1373,77 @@ async def check_shame_credit_expiry():
             expired_entries = check_expired_entries(guild.id)
             if not expired_entries:
                 continue
-                
+
             guild_data = get_guild_data(guild.id)
             entries_removed = False
-            
+
+            # Remove ALL expired entries before doing any Discord API awaits.
+            for entry_info in expired_entries:
+                entry_id_str = str(entry_info["id"])
+
+                if entry_id_str in guild_data["entries"]:
+                    del guild_data["entries"][entry_id_str]
+                    entries_removed = True
+
+            # Persist the new state before broadcasting anything.
+            if entries_removed:
+                if not update_guild_data(guild.id, guild_data):
+                    print(
+                        f"❌ Failed to save expired-entry removals "
+                        f"for {guild.name}; skipping expiry broadcast."
+                    )
+                    continue
+
+            # Now notify about each expired entry.
             for entry_info in expired_entries:
                 try:
-                    # Attempt the broadcast first
-                    await broadcast_entry_expire(guild, guild.id, entry_info["id"], entry_info)
-                    
-                    # Only delete if the broadcast didn't trigger a network crash
-                    entry_id_str = str(entry_info["id"])
-                    if entry_id_str in guild_data["entries"]:
-                        del guild_data["entries"][entry_id_str]
-                        entries_removed = True
+                    await broadcast_entry_expire(
+                        guild,
+                        guild.id,
+                        entry_info["id"],
+                        entry_info
+                    )
                 except Exception as e:
-                    print(f"Error broadcasting expiry for entry {entry_info['id']}: {e}")
-                    
-            if entries_removed:
-                update_guild_data(guild.id, guild_data)
-                
+                    print(
+                        f"Error broadcasting expiry for entry "
+                        f"{entry_info['id']}: {e}"
+                    )
+
+            # Rebuild the hall ONCE, after all entries have been removed.
+            guild_data = get_guild_data(guild.id)
+            shame_channel_id = guild_data.get("shame_channel")
+
+            if shame_channel_id:
+                channel = guild.get_channel(shame_channel_id)
+
+                if (
+                    channel
+                    and channel.permissions_for(guild.me).send_messages
+                ):
+                    try:
+                        hall_messages = build_hall_display(
+                            guild,
+                            guild.id
+                        )
+                        await broadcast_hall_to_channel(
+                            channel,
+                            hall_messages
+                        )
+                    except discord.Forbidden:
+                        pass
+
     except Exception as e:
         print(f"Error in check_shame_credit_expiry background loop: {e}")
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        await broadcast_error_log(f"🚨 **Background Loop Failure (`check_shame_credit_expiry`):**\n```python\n{tb}\n```")
+        tb = "".join(
+            traceback.format_exception(
+                type(e), e, e.__traceback__
+            )
+        )
+        await broadcast_error_log(
+            f"🚨 **Background Loop Failure "
+            f"(`check_shame_credit_expiry`):**\n"
+            f"```python\n{tb}\n```"
+        )
 
 @check_shame_credit_expiry.before_loop
 async def before_check_shame_credit_expiry():
