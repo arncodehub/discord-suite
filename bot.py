@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.21"
+BOT_VERSION = "1.9.22"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1883,13 +1883,20 @@ async def create_entry(
     entry_type = type.value
     if date:
         try:
-            # Parse M/D/YY format and set to 12 PM Pacific
+            # Parse M/D/YY format (returns datetime set to 12 PM)
             entry_date = parse_flexible_date(date)
             
-            # Convert to Pacific timezone at 12 PM
-            pacific_12pm = get_pacific_time().replace(hour=12, minute=0, second=0, microsecond=0)
-            # Use the specified date but in Pacific timezone
-            entry_date_pacific = pacific_12pm.replace(month=entry_date.month, day=entry_date.day, year=entry_date.year)
+            # Get current Pacific time and apply the parsed year, month, and day at 12:00 PM (noon)
+            pacific_now = get_pacific_time()
+            entry_date_pacific = pacific_now.replace(
+                year=entry_date.year,
+                month=entry_date.month,
+                day=entry_date.day,
+                hour=12,
+                minute=0,
+                second=0,
+                microsecond=0
+            )
             
             # Validate and get adjusted datetime (12 PM or 11:59 PM Pacific)
             is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, entry_type)
@@ -2091,8 +2098,16 @@ async def change_entry(
     if date:
         try:
             entry_date = parse_flexible_date(date)
-            pacific_12pm = get_pacific_time().replace(hour=12, minute=0, second=0, microsecond=0)
-            entry_date_pacific = pacific_12pm.replace(month=entry_date.month, day=entry_date.day, year=entry_date.year)
+            pacific_now = get_pacific_time()
+            entry_date_pacific = pacific_now.replace(
+                year=entry_date.year,
+                month=entry_date.month,
+                day=entry_date.day,
+                hour=12,
+                minute=0,
+                second=0,
+                microsecond=0
+            )
             
             effective_type = new_entry.get("type", old_entry.get("type", "shame"))
             is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, effective_type)
