@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.9.22"
+BOT_VERSION = "1.10.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -712,7 +712,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
                 expiry_timestamp = int(expiry_date.timestamp())
                 reason = entry.get("reason", "No reason provided")
                 
-                shame_lines.append(f"{shame_emoji} {reason} (expires <t:{expiry_timestamp}:R>)")
+                shame_lines.append(f"{shame_emoji} {reason} (expires <t:{expiry_timestamp}:R>) (ID: {entry_id})")
         
         shame_messages = split_message_at_limit(shame_lines)
         messages.extend(shame_messages)
@@ -740,7 +740,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
                 expiry_timestamp = int(expiry_date.timestamp())
                 reason = entry.get("reason", "No reason provided")
                 
-                credit_lines.append(f"{credit_emoji} {reason} (expires <t:{expiry_timestamp}:R>)")
+                credit_lines.append(f"{credit_emoji} {reason} (expires <t:{expiry_timestamp}:R>) (ID: {entry_id})")
         
         credit_messages = split_message_at_limit(credit_lines)
         messages.extend(credit_messages)
