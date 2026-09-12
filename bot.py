@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.11.0"
+BOT_VERSION = "1.11.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1856,23 +1856,49 @@ async def info(interaction: discord.Interaction):
 
     await interaction.response.send_message(response_text)
 
+# ===== AUTOCOMPLETE FUNCTIONS FOR ALIASES =====
+
+async def user_alias_autocomplete(
+    interaction: discord.Interaction,
+    current: str
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete for user selection - returns aliases"""
+    choices = []
+    current_lower = current.lower()
+    
+    for user_id, alias in USER_ALIASES.items():
+        if current_lower in alias.lower():
+            choices.append(app_commands.Choice(name=alias, value=str(user_id)))
+    
+    # Limit to 25 choices (Discord's limit)
+    return choices[:25]
+
+async def alias_name_autocomplete(
+    interaction: discord.Interaction,
+    current: str
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete for alias names"""
+    choices = []
+    current_lower = current.lower()
+    
+    for user_id, alias in USER_ALIASES.items():
+        if current_lower in alias.lower():
+            choices.append(app_commands.Choice(name=alias, value=alias))
+    
+    # Limit to 25 choices (Discord's limit)
+    return choices[:25]
+
+# ===== END AUTOCOMPLETE FUNCTIONS =====
+
 @bot.tree.command(name="create_entry", description="Create a Hall of Shame/Credit entry")
 @app_commands.describe(
-    user="The user to nominate",
+    user="The user to nominate (start typing to see aliases)",
     type="Type: Shame or Credit",
     reason="Reason for the nomination",
     date="Date of the event in M/D/YY format (e.g., 8/22/26) - optional, defaults to today"
 )
+@app_commands.autocomplete(user=user_alias_autocomplete)
 @app_commands.choices(
-    user=[
-        app_commands.Choice(name="California StateRoute Highway #1", value="995165764594176010"),
-        app_commands.Choice(name="Code Station", value="807087691522375681"),
-        app_commands.Choice(name="MineSpeed", value="1294395464803811452"),
-        app_commands.Choice(name="Airplane", value="1137904269664718948"),
-        app_commands.Choice(name="Link's Siemens S700 LRV", value="838589314756902984"),
-        app_commands.Choice(name="Snowy City", value="1191502706360205412"),
-        app_commands.Choice(name="N.12", value="987131131767959614")
-    ],
     type=[
         app_commands.Choice(name="Shame", value="shame"),
         app_commands.Choice(name="Credit", value="credit")
@@ -1881,7 +1907,7 @@ async def info(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def create_entry(
     interaction: discord.Interaction, 
-    user: app_commands.Choice[str],
+    user: str,
     type: app_commands.Choice[str],
     reason: str,
     date: str = None
@@ -1903,9 +1929,16 @@ async def create_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
-    # Extract user ID and name from dropdown choice
-    user_id = int(user.value)
-    username = user.name
+    # Parse user from autocomplete (it's now a string user_id)
+    try:
+        user_id = int(user)
+        if user_id not in USER_ALIASES:
+            await interaction.response.send_message("❌ Invalid user selection.", ephemeral=True)
+            return
+        username = USER_ALIASES[user_id]
+    except ValueError:
+        await interaction.response.send_message("❌ Invalid user selection.", ephemeral=True)
+        return
 
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
@@ -2036,21 +2069,13 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
     id="Entry ID to edit",
-    user="New user - optional",
+    user="New user - optional (start typing to see aliases)",
     type="New type: Shame or Credit (optional)",
     reason="New reason (optional)",
     date="New date in M/D/YY format (e.g., 8/22/26) - optional"
 )
+@app_commands.autocomplete(user=user_alias_autocomplete)
 @app_commands.choices(
-    user=[
-        app_commands.Choice(name="California StateRoute Highway #1", value="995165764594176010"),
-        app_commands.Choice(name="Code Station", value="807087691522375681"),
-        app_commands.Choice(name="MineSpeed", value="1294395464803811452"),
-        app_commands.Choice(name="Airplane", value="1137904269664718948"),
-        app_commands.Choice(name="Link's Siemens S700 LRV", value="838589314756902984"),
-        app_commands.Choice(name="Snowy City", value="1191502706360205412"),
-        app_commands.Choice(name="N.12", value="987131131767959614")
-    ],
     type=[
         app_commands.Choice(name="Shame", value="shame"),
         app_commands.Choice(name="Credit", value="credit")
@@ -2060,7 +2085,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
 async def change_entry(
     interaction: discord.Interaction,
     id: int,
-    user: app_commands.Choice[str] = None,
+    user: str = None,
     type: app_commands.Choice[str] = None,
     reason: str = None,
     date: str = None
@@ -2087,12 +2112,19 @@ async def change_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         return
 
-    # Extract user ID and name from dropdown choice if provided
+    # Parse user from autocomplete if provided
     user_id = None
     username = None
     if user:
-        user_id = int(user.value)
-        username = user.name
+        try:
+            user_id = int(user)
+            if user_id not in USER_ALIASES:
+                await interaction.response.send_message("❌ Invalid user selection.", ephemeral=True)
+                return
+            username = USER_ALIASES[user_id]
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid user selection.", ephemeral=True)
+            return
 
     guild_data = get_guild_data(interaction.guild_id)
     cooldown_seconds = guild_data.get("cooldown", 0)
@@ -2230,9 +2262,10 @@ async def create_alias(interaction: discord.Interaction, user: discord.Member, a
 
 @bot.tree.command(name="change_alias", description="Change an existing user alias")
 @app_commands.describe(
-    alias="The current alias name",
+    alias="The current alias name (start typing to see options)",
     new_alias="The new alias name"
 )
+@app_commands.autocomplete(alias=alias_name_autocomplete)
 @app_commands.guild_only()
 async def change_alias(interaction: discord.Interaction, alias: str, new_alias: str):
     if is_command_disabled(interaction.guild_id, "change_alias"):
@@ -2295,7 +2328,8 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
     )
 
 @bot.tree.command(name="delete_alias", description="Delete a user alias")
-@app_commands.describe(alias="The alias name to delete")
+@app_commands.describe(alias="The alias name to delete (start typing to see options)")
+@app_commands.autocomplete(alias=alias_name_autocomplete)
 @app_commands.guild_only()
 async def delete_alias(interaction: discord.Interaction, alias: str):
     if is_command_disabled(interaction.guild_id, "delete_alias"):
