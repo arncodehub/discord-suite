@@ -23,12 +23,13 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.10.0"
+BOT_VERSION = "1.11.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
 DATA_FILE = "shame_data.json"
 VOTE_DATA_FILE = "vote_data.json"
+ALIASES_FILE = "aliases.json"
 
 # -----------------------------
 # Wordle Auto Role Constants
@@ -56,6 +57,35 @@ USER_ALIASES = {
     1191502706360205412: "Snowy City",
     987131131767959614: "N.12"
 }
+
+def load_aliases():
+    """Load aliases from file, merge with default aliases"""
+    global USER_ALIASES
+    if os.path.exists(ALIASES_FILE):
+        try:
+            with open(ALIASES_FILE, 'r') as f:
+                file_aliases = json.load(f)
+                # Convert string keys back to integers
+                for key, value in file_aliases.items():
+                    USER_ALIASES[int(key)] = value
+        except (json.JSONDecodeError, PermissionError, ValueError) as e:
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{ALIASES_FILE}` found!** Using defaults.\nError: `{e}`"))
+
+def save_aliases():
+    """Save current aliases to file"""
+    tmp_file = ALIASES_FILE + ".tmp"
+    try:
+        # Convert integer keys to strings for JSON
+        aliases_dict = {str(k): v for k, v in USER_ALIASES.items()}
+        with open(tmp_file, 'w') as f:
+            json.dump(aliases_dict, f, indent=4)
+        os.replace(tmp_file, ALIASES_FILE)
+        return True
+    except Exception as e:
+        print(f"Error saving aliases: {e}")
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_aliases`)** — Disk likely full!\n```python\n{tb}\n```"))
+        return False
 
 # Cooldown tracking: {guild_id: {user_id: timestamp}}
 cooldowns = {}
@@ -531,7 +561,7 @@ def parse_flexible_date(date_str: str) -> datetime:
     """
     Parse date in M/D/YY or MM/DD/YYYY or M/D/YYYY format.
     Examples: 8/22/26, 08/22/2026, 8/3/26
-    Returns datetime object set to 12 PM.
+    Returns datetime object set to 12 PM Pacific time (timezone-aware).
     """
     if not date_str or not isinstance(date_str, str):
         raise ValueError("Invalid date string")
@@ -555,47 +585,46 @@ def parse_flexible_date(date_str: str) -> datetime:
         if not (1 <= day <= 31):
             raise ValueError("Day must be between 1 and 31")
         
-        # Create datetime and set to 12 PM
-        return datetime(year, month, day, 12, 0, 0)
+        # Create datetime at 12 PM in Pacific time
+        # Determine if DST is in effect for this date (March-November approximation)
+        if 3 <= month <= 11:
+            pacific_offset = timezone(timedelta(hours=-7))  # PDT
+        else:
+            pacific_offset = timezone(timedelta(hours=-8))  # PST
+        
+        # Create timezone-aware datetime in Pacific time
+        dt_pacific = datetime(year, month, day, 12, 0, 0, tzinfo=pacific_offset)
+        
+        # Convert to UTC and strip timezone info for storage
+        dt_utc = dt_pacific.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt_utc
     except (ValueError, IndexError) as e:
         raise ValueError(f"Invalid date format. Use M/D/YY (e.g., 8/22/26): {e}")
 
 def validate_entry_date(specified_date: datetime, entry_type: str) -> tuple[bool, datetime, str]:
     """
     Validates if an entry date is within acceptable expiry window.
-    Attempts to use 12 PM Pacific; if expired, tries 11:59 PM Pacific same day.
     
-    A = current time (Pacific)
-    B = specified date (already parsed to 12 PM Pacific if provided)
+    The specified_date should be a timezone-naive datetime representing UTC time.
+    This function checks if the entry would still be valid (not expired) as of now.
     
-    For shame entries: A must be <= B + 7 days
-    For credit entries: A must be <= B + 21 days
+    For shame entries: expiry is 7 days after entry date
+    For credit entries: expiry is 21 days after entry date
     
     Returns: (is_valid, adjusted_datetime, error_message)
-    If valid, adjusted_datetime is the timestamp to use (12 PM or 11:59 PM Pacific)
-    If invalid, error_message explains why
     """
-    pacific_now = get_pacific_time()
+    # Get current UTC time for comparison
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     expiry_days = 7 if entry_type == "shame" else 21
     
-    # specified_date is already in Pacific time at 12 PM
-    entry_date_12pm = specified_date
-    expiry_at_12pm = entry_date_12pm + timedelta(days=expiry_days)
+    # Calculate expiry
+    expiry_date = specified_date + timedelta(days=expiry_days)
     
-    if pacific_now <= expiry_at_12pm:
-        # 12 PM works
-        return True, entry_date_12pm, ""
+    if utc_now <= expiry_date:
+        return True, specified_date, ""
     
-    # 12 PM failed, try 11:59 PM same day
-    entry_date_11pm = specified_date.replace(hour=23, minute=59, second=59)
-    expiry_at_11pm = entry_date_11pm + timedelta(days=expiry_days)
-    
-    if pacific_now <= expiry_at_11pm:
-        # 11:59 PM works
-        return True, entry_date_11pm, ""
-    
-    # Both failed
-    return False, None, f"❌ Entry date is too old. A {entry_type} entry for {specified_date.strftime('%m/%d/%y')} cannot be added (already expired or expiring immediately)."
+    # Entry would already be expired
+    return False, None, f"❌ Entry date is too old. A {entry_type} entry for this date cannot be added (already expired)."
 
 def format_date_simple(date_str: str) -> str:
     """
@@ -649,7 +678,8 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             sorted_users.append((user_id, entries_list, most_recent_date))
         
         # Sort by count (desc), then by most recent date (desc)
-        sorted_users.sort(key=lambda x: (-len(x[1]), -x[2].timestamp()))
+        # Treat dates as UTC when converting to timestamp for sorting
+        sorted_users.sort(key=lambda x: (-len(x[1]), -x[2].replace(tzinfo=timezone.utc).timestamp()))
         return sorted_users
     
     shame_sorted = sort_user_entries(shame_entries)
@@ -709,7 +739,8 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
                 expiry_date = entry_date + timedelta(days=7)
-                expiry_timestamp = int(expiry_date.timestamp())
+                # Treat stored datetime as UTC when converting to timestamp
+                expiry_timestamp = int(expiry_date.replace(tzinfo=timezone.utc).timestamp())
                 reason = entry.get("reason", "No reason provided")
                 
                 shame_lines.append(f"{shame_emoji} {reason} (expires <t:{expiry_timestamp}:R>) (ID: {entry_id})")
@@ -737,7 +768,8 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
             for entry_id, entry in entries_list:
                 entry_date = datetime.fromisoformat(entry["date"])
                 expiry_date = entry_date + timedelta(days=21)
-                expiry_timestamp = int(expiry_date.timestamp())
+                # Treat stored datetime as UTC when converting to timestamp
+                expiry_timestamp = int(expiry_date.replace(tzinfo=timezone.utc).timestamp())
                 reason = entry.get("reason", "No reason provided")
                 
                 credit_lines.append(f"{credit_emoji} {reason} (expires <t:{expiry_timestamp}:R>) (ID: {entry_id})")
@@ -1695,6 +1727,7 @@ async def on_ready():
     print('------')
     
     load_vote_data()
+    load_aliases()
     
     # Pre-calculate the critical amount for all connected servers on boot
     for guild in bot.guilds:
@@ -1879,27 +1912,19 @@ async def create_entry(
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    # Parse date - use the date picker value or default to current Pacific time
+    # Parse date - use the date picker value or default to current time
     entry_type = type.value
     if date:
         try:
-            # Parse M/D/YY format (returns datetime set to 12 PM)
+            # Parse M/D/YY format and set to 12 PM Pacific, converted to UTC
             entry_date = parse_flexible_date(date)
             
-            # Get current Pacific time and apply the parsed year, month, and day at 12:00 PM (noon)
-            pacific_now = get_pacific_time()
-            entry_date_pacific = pacific_now.replace(
-                year=entry_date.year,
-                month=entry_date.month,
-                day=entry_date.day,
-                hour=12,
-                minute=0,
-                second=0,
-                microsecond=0
-            )
+            # entry_date is now UTC timezone-naive
+            # We store this directly
+            entry_date_utc = entry_date
             
-            # Validate and get adjusted datetime (12 PM or 11:59 PM Pacific)
-            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, entry_type)
+            # Validate that the entry hasn't already expired
+            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_utc, entry_type)
             if not is_valid:
                 await interaction.response.send_message(error_msg, ephemeral=True)
                 return
@@ -1909,9 +1934,8 @@ async def create_entry(
             await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=True)
             return
     else:
-        # Default to current Pacific time, no adjustment
-        pacific_now = get_pacific_time()
-        entry_date_str = pacific_now.isoformat()
+        # Default to current UTC time
+        entry_date_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     
     # Get next persistent ID (this updates guild_data internally)
     entry_id = get_next_entry_id(interaction.guild_id)
@@ -2097,20 +2121,14 @@ async def change_entry(
     
     if date:
         try:
+            # Parse M/D/YY format and set to 12 PM Pacific, converted to UTC
             entry_date = parse_flexible_date(date)
-            pacific_now = get_pacific_time()
-            entry_date_pacific = pacific_now.replace(
-                year=entry_date.year,
-                month=entry_date.month,
-                day=entry_date.day,
-                hour=12,
-                minute=0,
-                second=0,
-                microsecond=0
-            )
+            
+            # entry_date is now UTC timezone-naive
+            entry_date_utc = entry_date
             
             effective_type = new_entry.get("type", old_entry.get("type", "shame"))
-            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_pacific, effective_type)
+            is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_utc, effective_type)
             if not is_valid:
                 await interaction.response.send_message(error_msg, ephemeral=True)
                 return
@@ -2152,6 +2170,229 @@ async def change_entry(
                 pass
 
     await interaction.response.send_message(f"✅ Updated entry #{entry_id_str}", ephemeral=True)
+
+# ===== ALIAS MANAGEMENT COMMANDS =====
+
+@bot.tree.command(name="create_alias", description="Create a new user alias")
+@app_commands.describe(
+    user="The user to create an alias for",
+    alias="The alias name to assign"
+)
+@app_commands.guild_only()
+async def create_alias(interaction: discord.Interaction, user: discord.Member, alias: str):
+    if is_command_disabled(interaction.guild_id, "create_alias"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    # Check if user already has an alias
+    if user.id in USER_ALIASES:
+        await interaction.response.send_message(
+            f"❌ User `{user.name}` already has an alias: `{USER_ALIASES[user.id]}`. Use `/change_alias` to modify it.",
+            ephemeral=True
+        )
+        return
+
+    # Check if alias is already in use
+    for uid, existing_alias in USER_ALIASES.items():
+        if existing_alias.lower() == alias.lower():
+            existing_user = interaction.guild.get_member(uid)
+            user_ref = existing_user.name if existing_user else f"User ID {uid}"
+            await interaction.response.send_message(
+                f"❌ The alias `{existing_alias}` is already assigned to `{user_ref}`.",
+                ephemeral=True
+            )
+            return
+
+    # Create the alias
+    USER_ALIASES[user.id] = alias
+    if not save_aliases():
+        await interaction.response.send_message("❌ Failed to save alias. Please try again later.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"✅ Created alias for `{user.name}`: `{alias}`",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="change_alias", description="Change an existing user alias")
+@app_commands.describe(
+    alias="The current alias name",
+    new_alias="The new alias name"
+)
+@app_commands.guild_only()
+async def change_alias(interaction: discord.Interaction, alias: str, new_alias: str):
+    if is_command_disabled(interaction.guild_id, "change_alias"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    # Find the user ID with this alias
+    user_id = None
+    for uid, existing_alias in USER_ALIASES.items():
+        if existing_alias.lower() == alias.lower():
+            user_id = uid
+            break
+
+    if user_id is None:
+        await interaction.response.send_message(
+            f"❌ No user found with alias `{alias}`.",
+            ephemeral=True
+        )
+        return
+
+    # Check if new alias is already in use by someone else
+    for uid, existing_alias in USER_ALIASES.items():
+        if uid != user_id and existing_alias.lower() == new_alias.lower():
+            existing_user = interaction.guild.get_member(uid)
+            user_ref = existing_user.name if existing_user else f"User ID {uid}"
+            await interaction.response.send_message(
+                f"❌ The alias `{existing_alias}` is already assigned to `{user_ref}`.",
+                ephemeral=True
+            )
+            return
+
+    # Change the alias
+    old_alias = USER_ALIASES[user_id]
+    USER_ALIASES[user_id] = new_alias
+    if not save_aliases():
+        # Revert on failure
+        USER_ALIASES[user_id] = old_alias
+        await interaction.response.send_message("❌ Failed to save alias. Please try again later.", ephemeral=True)
+        return
+
+    user = interaction.guild.get_member(user_id)
+    user_ref = user.name if user else f"User ID {user_id}"
+    await interaction.response.send_message(
+        f"✅ Changed alias for `{user_ref}`: `{old_alias}` → `{new_alias}`",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="delete_alias", description="Delete a user alias")
+@app_commands.describe(alias="The alias name to delete")
+@app_commands.guild_only()
+async def delete_alias(interaction: discord.Interaction, alias: str):
+    if is_command_disabled(interaction.guild_id, "delete_alias"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+
+    if not is_manager(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    # Find the user ID with this alias
+    user_id = None
+    for uid, existing_alias in USER_ALIASES.items():
+        if existing_alias.lower() == alias.lower():
+            user_id = uid
+            break
+
+    if user_id is None:
+        await interaction.response.send_message(
+            f"❌ No user found with alias `{alias}`.",
+            ephemeral=True
+        )
+        return
+
+    # Delete the alias
+    deleted_alias = USER_ALIASES[user_id]
+    del USER_ALIASES[user_id]
+    if not save_aliases():
+        # Revert on failure
+        USER_ALIASES[user_id] = deleted_alias
+        await interaction.response.send_message("❌ Failed to delete alias. Please try again later.", ephemeral=True)
+        return
+
+    user = interaction.guild.get_member(user_id)
+    user_ref = user.name if user else f"User ID {user_id}"
+    await interaction.response.send_message(
+        f"✅ Deleted alias `{deleted_alias}` for `{user_ref}`",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="list_aliases", description="List all user aliases")
+@app_commands.guild_only()
+async def list_aliases(interaction: discord.Interaction):
+    if is_command_disabled(interaction.guild_id, "list_aliases"):
+        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=True)
+        return
+
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+
+    if not USER_ALIASES:
+        await interaction.response.send_message("📋 No aliases configured.", ephemeral=True)
+        return
+
+    # Build list of aliases sorted by alias name
+    alias_list = []
+    for user_id, alias in sorted(USER_ALIASES.items(), key=lambda x: x[1].lower()):
+        user = interaction.guild.get_member(user_id)
+        if user:
+            alias_list.append(f"• `{alias}` → {user.mention} (`{user.name}`)")
+        else:
+            alias_list.append(f"• `{alias}` → User ID `{user_id}` (not in server)")
+
+    # Split into chunks if too long (Discord has 2000 char limit)
+    response = "📋 **User Aliases**\n\n" + "\n".join(alias_list)
+    
+    if len(response) > 2000:
+        # Split into multiple messages
+        await interaction.response.send_message("📋 **User Aliases** (1/2)", ephemeral=True)
+        chunks = [alias_list[i:i + 20] for i in range(0, len(alias_list), 20)]
+        for i, chunk in enumerate(chunks):
+            chunk_msg = "\n".join(chunk)
+            if i == 0:
+                await interaction.response.send_message(f"📋 **User Aliases** ({i+1}/{len(chunks)})\n\n{chunk_msg}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"📋 **User Aliases** ({i+1}/{len(chunks)})\n\n{chunk_msg}", ephemeral=True)
+    else:
+        await interaction.response.send_message(response, ephemeral=True)
+
+# ===== END ALIAS MANAGEMENT COMMANDS =====
 
 # /list_my_shame and /list_all_shame removed in v1.9.0
 
