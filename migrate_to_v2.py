@@ -23,7 +23,7 @@ def backup_files():
     backup_dir = f"backup_{timestamp}"
     os.makedirs(backup_dir, exist_ok=True)
     
-    files_to_backup = ["shame_data.json", "vote_data.json", "aliases.json"]
+    files_to_backup = ["shame_data.json", "vote_data.json", "votes.json", "aliases.json"]
     for file in files_to_backup:
         if os.path.exists(file):
             shutil.copy2(file, os.path.join(backup_dir, file))
@@ -105,7 +105,10 @@ def migrate_data():
     save_json("main.json", main_data)
     save_json("halls.json", halls_data)
     save_json("aliases.json", new_aliases_data)
-    # vote_data.json stays the same
+    # Rename vote_data.json -> votes.json
+    if os.path.exists("vote_data.json"):
+        shutil.copy2("vote_data.json", "votes.json")
+        print(f"✓ Renamed vote_data.json -> votes.json")
     print()
     
     # Step 5: Summary
@@ -114,8 +117,8 @@ def migrate_data():
     print(f"✓ Created main.json (guild configs)")
     print(f"✓ Created halls.json (hall entries)")
     print(f"✓ Created aliases.json (per-server aliases)")
+    print(f"✓ Renamed vote_data.json -> votes.json")
     print(f"✓ Migrated {len(aliases_data)} aliases to guild {TARGET_GUILD_ID}")
-    print(f"✓ Preserved vote_data.json")
     print()
     print("Old file (shame_data.json) can be deleted after verification.")
     print("Backups are available in:", backup_dir)

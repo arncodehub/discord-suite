@@ -29,7 +29,7 @@ BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner comma
 # Data storage files
 DATA_FILE = "main.json"
 HALLS_FILE = "halls.json"
-VOTE_DATA_FILE = "vote_data.json"
+VOTE_DATA_FILE = "votes.json"
 ALIASES_FILE = "aliases.json"
 
 # -----------------------------
@@ -1923,6 +1923,50 @@ async def alias_name_autocomplete(
     return choices[:25]
 
 # ===== END AUTOCOMPLETE FUNCTIONS =====
+
+@bot.tree.command(name="changelog", description="Show the version history of the bot.")
+async def changelog(interaction: discord.Interaction):
+    changelog_text = (
+        "📋 **Suite Bot Changelog**\n\n"
+        "**v2.0.0**\n"
+        "• Per-server aliases (aliases are no longer global)\n"
+        "• Renamed `shame_data.json` → `main.json`\n"
+        "• Extracted hall entries to `halls.json`\n"
+        "• Renamed `vote_data.json` → `votes.json`\n"
+        "• Removed all legacy/backward-compatibility code\n"
+        "• Added `/changelog` command\n\n"
+        "**v1.11.3**\n"
+        "• All command responses made non-ephemeral except `/vote` and `/unvote`\n\n"
+        "**v1.11.2**\n"
+        "• Fixed alias escaping (e.g. `Pi><el` no longer shows as `Pi\\><el`)\n"
+        "• Fixed broadcast dates showing UTC instead of Pacific time\n"
+        "• `/change_alias` responses are now non-ephemeral\n"
+        "• Renamed `/set_shame_channel` → `/set_hall_channel`\n"
+        "• Renamed `/reset_shame_channel` → `/reset_hall_channel`\n\n"
+        "**v1.11.1**\n"
+        "• Bug fixes\n\n"
+        "**v1.11.0**\n"
+        "• Added alias management commands (`/create_alias`, `/change_alias`, `/delete_alias`, `/list_aliases`)\n"
+        "• Fixed timezone bugs\n\n"
+        "**v1.10.0**\n"
+        "• Persistent numeric entry IDs added to hall display\n\n"
+        "**v1.9.x**\n"
+        "• Hall of Credit added alongside Hall of Shame\n"
+        "• Past-date entry support\n"
+        "• External user (non-member) support\n"
+        "• Hall display split into shame/credit sections\n"
+        "• 2000-char message splitting for long halls\n\n"
+        "**v1.3.x–v1.8.x**\n"
+        "• Votekick system (community-driven kicks/bans with configurable duration)\n"
+        "• Active member role automation\n"
+        "• Privilege escalation security fix\n"
+        "• Logs moved to owner DMs\n"
+        "• Ragebait message marking (later removed)\n\n"
+        "**v1.0–v1.2**\n"
+        "• Initial release: Hall of Shame for tracking infractions/funny moments\n"
+        "• Basic entry management and expiry"
+    )
+    await interaction.response.send_message(changelog_text)
 
 @bot.tree.command(name="create_entry", description="Create a Hall of Shame/Credit entry")
 @app_commands.describe(
