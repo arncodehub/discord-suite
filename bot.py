@@ -23,7 +23,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.11.1"
+BOT_VERSION = "1.11.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -514,7 +514,7 @@ def get_member_display_name(member) -> str:
 
 def escape_discord_formatting(text: str) -> str:
     """Escape Discord formatting characters."""
-    chars_to_escape = ['*', '_', '~', '`', '|', '>', '\\']
+    chars_to_escape = ['*', '_', '~', '`', '|', '>']
     for char in chars_to_escape:
         text = text.replace(char, '\\' + char)
     return text
@@ -628,13 +628,25 @@ def validate_entry_date(specified_date: datetime, entry_type: str) -> tuple[bool
 
 def format_date_simple(date_str: str) -> str:
     """
-    Convert ISO date string to M/D/YY format.
-    Example: 2026-08-22T12:00:00 -> 8/22/26
+    Convert ISO date string (stored as UTC) to M/D/YY format in Pacific time.
+    Example: 2026-08-22T12:00:00 (UTC) -> 8/22/26 (Pacific)
     """
     try:
-        dt = datetime.fromisoformat(date_str)
-        year_short = dt.year % 100  # Get last 2 digits
-        return f"{dt.month}/{dt.day}/{year_short}"
+        # Parse as UTC
+        dt_utc = datetime.fromisoformat(date_str)
+        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+        
+        # Determine if DST is in effect for this date (March-November approximation)
+        if 3 <= dt_utc.month <= 11:
+            pacific_offset = timezone(timedelta(hours=-7))  # PDT
+        else:
+            pacific_offset = timezone(timedelta(hours=-8))  # PST
+        
+        # Convert to Pacific time
+        dt_pacific = dt_utc.astimezone(pacific_offset)
+        
+        year_short = dt_pacific.year % 100  # Get last 2 digits
+        return f"{dt_pacific.month}/{dt_pacific.day}/{year_short}"
     except:
         return date_str
 
@@ -2296,7 +2308,7 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
     if user_id is None:
         await interaction.response.send_message(
             f"❌ No user found with alias `{alias}`.",
-            ephemeral=True
+            ephemeral=False
         )
         return
 
@@ -2307,7 +2319,7 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
             user_ref = existing_user.name if existing_user else f"User ID {uid}"
             await interaction.response.send_message(
                 f"❌ The alias `{existing_alias}` is already assigned to `{user_ref}`.",
-                ephemeral=True
+                ephemeral=False
             )
             return
 
@@ -2317,14 +2329,14 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
     if not save_aliases():
         # Revert on failure
         USER_ALIASES[user_id] = old_alias
-        await interaction.response.send_message("❌ Failed to save alias. Please try again later.", ephemeral=True)
+        await interaction.response.send_message("❌ Failed to save alias. Please try again later.", ephemeral=False)
         return
 
     user = interaction.guild.get_member(user_id)
     user_ref = user.name if user else f"User ID {user_id}"
     await interaction.response.send_message(
         f"✅ Changed alias for `{user_ref}`: `{old_alias}` → `{new_alias}`",
-        ephemeral=True
+        ephemeral=False
     )
 
 @bot.tree.command(name="delete_alias", description="Delete a user alias")
@@ -2705,28 +2717,28 @@ async def reset_manager_role(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Manager role reset. Only Moderators can manage the bot now.")
 
 # --- SHAME CONFIG ---
-@bot.tree.command(name="set_shame_channel", description="Sets the broadcast channel for Hall of Shame/Credit")
+@bot.tree.command(name="set_hall_channel", description="Sets the broadcast channel for Hall of Shame/Credit")
 @app_commands.describe(broadcast_channel="The broadcast channel for shame/credit entries")
 @app_commands.guild_only()
-async def set_shame_channel(interaction: discord.Interaction, broadcast_channel: discord.TextChannel):
+async def set_hall_channel(interaction: discord.Interaction, broadcast_channel: discord.TextChannel):
     if not is_manager(interaction):
         await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["shame_channel"] = broadcast_channel.id
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message(f"✅ Shame broadcast channel set to {broadcast_channel.mention}")
+    await interaction.response.send_message(f"✅ Hall broadcast channel set to {broadcast_channel.mention}")
 
-@bot.tree.command(name="reset_shame_channel", description="Resets the Hall of Shame/Credit broadcast channel")
+@bot.tree.command(name="reset_hall_channel", description="Resets the Hall of Shame/Credit broadcast channel")
 @app_commands.guild_only()
-async def reset_shame_channel(interaction: discord.Interaction):
+async def reset_hall_channel(interaction: discord.Interaction):
     if not is_manager(interaction):
         await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=True)
         return
     guild_data = get_guild_data(interaction.guild_id)
     guild_data["shame_channel"] = None
     update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("✅ Shame broadcast channel reset.")
+    await interaction.response.send_message("✅ Hall broadcast channel reset.")
 
 # --- VOTEKICK CONFIG ---
 @bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
