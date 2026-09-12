@@ -11,6 +11,9 @@ __pycache__
 # Temporary Files
 *.tmp
 
+# Local Backups
+backup_*
+
 # Misc
 CHANGELOG_*.md
 UPGRADE_NOTES_*.md

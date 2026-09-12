@@ -23,11 +23,12 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "1.11.3"
+BOT_VERSION = "2.0.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
-DATA_FILE = "shame_data.json"
+DATA_FILE = "main.json"
+HALLS_FILE = "halls.json"
 VOTE_DATA_FILE = "vote_data.json"
 ALIASES_FILE = "aliases.json"
 
@@ -48,37 +49,29 @@ WORDLE_SCAN_DAYS = 7
 
 # Aliases
 
-USER_ALIASES = {
-    995165764594176010: "California StateRoute Highway #1",
-    807087691522375681: "Code Station",
-    1294395464803811452: "MineSpeed",
-    1137904269664718948: "Airplane",
-    838589314756902984: "Link's Siemens S700 LRV",
-    1191502706360205412: "Snowy City",
-    987131131767959614: "N.12"
-}
+# Aliases - now per-guild structure loaded from aliases.json
+# Structure: {guild_id_str: {user_id_str: alias_str}}
+all_aliases = {}
 
 def load_aliases():
-    """Load aliases from file, merge with default aliases"""
-    global USER_ALIASES
+    """Load per-guild aliases from file"""
+    global all_aliases
     if os.path.exists(ALIASES_FILE):
         try:
             with open(ALIASES_FILE, 'r') as f:
-                file_aliases = json.load(f)
-                # Convert string keys back to integers
-                for key, value in file_aliases.items():
-                    USER_ALIASES[int(key)] = value
+                all_aliases = json.load(f)
         except (json.JSONDecodeError, PermissionError, ValueError) as e:
             asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{ALIASES_FILE}` found!** Using defaults.\nError: `{e}`"))
+            all_aliases = {}
+    else:
+        all_aliases = {}
 
 def save_aliases():
-    """Save current aliases to file"""
+    """Save per-guild aliases to file"""
     tmp_file = ALIASES_FILE + ".tmp"
     try:
-        # Convert integer keys to strings for JSON
-        aliases_dict = {str(k): v for k, v in USER_ALIASES.items()}
         with open(tmp_file, 'w') as f:
-            json.dump(aliases_dict, f, indent=4)
+            json.dump(all_aliases, f, indent=4)
         os.replace(tmp_file, ALIASES_FILE)
         return True
     except Exception as e:
@@ -86,6 +79,19 @@ def save_aliases():
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_aliases`)** — Disk likely full!\n```python\n{tb}\n```"))
         return False
+
+def get_guild_aliases(guild_id: int) -> dict:
+    """Get aliases for a specific guild"""
+    guild_id_str = str(guild_id)
+    if guild_id_str not in all_aliases:
+        all_aliases[guild_id_str] = {}
+        save_aliases()
+    return all_aliases[guild_id_str]
+
+def get_alias(guild_id: int, user_id: int) -> str | None:
+    """Get alias for a user in a guild, returns None if not found"""
+    guild_aliases = get_guild_aliases(guild_id)
+    return guild_aliases.get(str(user_id))
 
 # Cooldown tracking: {guild_id: {user_id: timestamp}}
 cooldowns = {}
@@ -294,7 +300,7 @@ async def run_discord_channel_backup():
             return
 
         files_to_send = []
-        for file_name in [DATA_FILE, VOTE_DATA_FILE]:
+        for file_name in [DATA_FILE, HALLS_FILE, VOTE_DATA_FILE, ALIASES_FILE]:
             if os.path.exists(file_name):
                 files_to_send.append(discord.File(file_name))
 
@@ -336,9 +342,34 @@ def save_shame_data(data):
         os.replace(tmp_file, DATA_FILE)
         return True
     except Exception as e:
-        print(f"Error saving shame data safely: {e}")
+        print(f"Error saving main data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_shame_data`)** — Disk likely full!\n```python\n{tb}\n```"))
+        return False
+
+def load_halls_data():
+    """Load halls data (entries) from halls.json"""
+    if os.path.exists(HALLS_FILE):
+        try:
+            with open(HALLS_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, PermissionError) as e:
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{HALLS_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
+            return {}
+    return {}
+
+def save_halls_data(data):
+    """Save halls data (entries) to halls.json"""
+    tmp_file = HALLS_FILE + ".tmp"
+    try:
+        with open(tmp_file, 'w') as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp_file, HALLS_FILE)
+        return True
+    except Exception as e:
+        print(f"Error saving halls data safely: {e}")
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_halls_data`)** — Disk likely full!\n```python\n{tb}\n```"))
         return False
 
 def get_guild_data(guild_id):
@@ -350,17 +381,30 @@ def get_guild_data(guild_id):
             "shame_channel": None,
             "cooldown": 0,
             "votekick_ban_duration": 7,
-            "entries": {},
             "disabled_commands": [],
             "activity_message_threshold": 1,
             "next_entry_id": 1,  # For persistent IDs
         }
         save_shame_data(data)
-    # Ensure next_entry_id exists for backward compatibility
-    if "next_entry_id" not in data[guild_id_str]:
-        data[guild_id_str]["next_entry_id"] = 1
-        save_shame_data(data)
     return data[guild_id_str]
+
+def get_guild_entries(guild_id):
+    """Get entries for a guild from halls.json"""
+    halls_data = load_halls_data()
+    guild_id_str = str(guild_id)
+    if guild_id_str not in halls_data:
+        halls_data[guild_id_str] = {"entries": {}}
+        save_halls_data(halls_data)
+    return halls_data[guild_id_str].get("entries", {})
+
+def update_guild_entries(guild_id, entries):
+    """Update entries for a guild in halls.json"""
+    halls_data = load_halls_data()
+    guild_id_str = str(guild_id)
+    if guild_id_str not in halls_data:
+        halls_data[guild_id_str] = {}
+    halls_data[guild_id_str]["entries"] = entries
+    return save_halls_data(halls_data)
 
 def get_all_data():
     return load_shame_data()
@@ -448,24 +492,6 @@ def clear_all_votes_in_guild(guild_id: int):
         del vote_data[guild_id_str]
         save_vote_data()
 
-def remove_expired_entries(guild_data):
-    expiry_days = guild_data.get("expiry_days")
-    if expiry_days is None:
-        return
-    
-    current_time = datetime.now()
-    entries_to_remove = []
-    
-    for entry_id, entry in guild_data["entries"].items():
-        entry_date = datetime.fromisoformat(entry["date"])
-        expiry_date = entry_date + timedelta(days=expiry_days)
-        
-        if current_time > expiry_date:
-            entries_to_remove.append(entry_id)
-            
-    for entry_id in entries_to_remove:
-        del guild_data["entries"][entry_id]
-
 def is_command_disabled(guild_id, command_name):
     guild_data = get_guild_data(guild_id)
     return command_name in guild_data.get("disabled_commands", [])
@@ -482,11 +508,11 @@ def get_next_entry_id(guild_id) -> int:
 
 def check_expired_entries(guild_id) -> list:
     """Finds expired entries without deleting them yet."""
-    guild_data = get_guild_data(guild_id)
+    guild_entries = get_guild_entries(guild_id)
     current_time = datetime.now()
     expired_entries = []
     
-    for entry_id, entry in list(guild_data["entries"].items()):
+    for entry_id, entry in list(guild_entries.items()):
         entry_type = entry.get("type", "shame")
         entry_date = datetime.fromisoformat(entry["date"])
         
@@ -658,16 +684,16 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
     Uses aliases instead of pinging users.
     """
     
-    guild_data = get_guild_data(guild_id)
+    guild_entries = get_guild_entries(guild_id)
     
-    if not guild_data["entries"]:
+    if not guild_entries:
         return ["🕊️ Both halls are currently empty."]
     
     # Separate entries by type
     shame_entries = {}
     credit_entries = {}
     
-    for entry_id, entry in guild_data["entries"].items():
+    for entry_id, entry in guild_entries.items():
         entry_type = entry.get("type", "shame")
         user_id = entry["user_id"]
         
@@ -737,7 +763,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
         
         for user_id, entries_list, _ in shame_sorted:
             # Use alias from mapping, fallback to username from entry
-            alias = USER_ALIASES.get(user_id)
+            alias = get_alias(guild_id, user_id)
             if not alias:
                 # Fallback to username stored in entry
                 alias = entries_list[0][1].get("username", str(user_id))
@@ -766,7 +792,7 @@ def build_hall_display(guild: discord.Guild, guild_id: int) -> list:
         
         for user_id, entries_list, _ in credit_sorted:
             # Use alias from mapping, fallback to username from entry
-            alias = USER_ALIASES.get(user_id)
+            alias = get_alias(guild_id, user_id)
             if not alias:
                 # Fallback to username stored in entry
                 alias = entries_list[0][1].get("username", str(user_id))
@@ -820,8 +846,8 @@ async def broadcast_entry_create(interaction: discord.Interaction, entry_id: int
     else:
         target_id = None
 
-    user_ref = USER_ALIASES.get(target_id, username)
-    action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")
+    user_ref = get_alias(interaction.guild_id, target_id) or username
+    action_taker = get_alias(interaction.guild_id, interaction.user.id) or "Unknown"
 
     broadcast_msg = (
         f"📝 New nomination for the Hall of {type_name}!!\n"
@@ -857,8 +883,8 @@ async def broadcast_entry_delete(interaction: discord.Interaction, entry_id: int
     formatted_date = format_date_simple(date_str)
     
     # Use alias instead of mention or ping
-    user_ref = USER_ALIASES.get(user_id, username)
-    action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")
+    user_ref = get_alias(interaction.guild_id, user_id) or username
+    action_taker = get_alias(interaction.guild_id, interaction.user.id) or "Unknown"
 
     broadcast_msg = (
         f"🗑️ Deleted {type_name} entry #{entry_id} for {user_ref}\n"
@@ -882,7 +908,7 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     """Broadcasts EDIT message."""
     guild_data = get_guild_data(interaction.guild_id)
     shame_channel_id = guild_data.get("shame_channel")
-    action_taker = USER_ALIASES.get(interaction.user.id, "Unknown")    
+    action_taker = get_alias(interaction.guild_id, interaction.user.id) or "Unknown"    
     changes = []
     unchanged = []
     
@@ -946,7 +972,7 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     formatted_date = format_date_simple(date_str)
     
     # Use alias instead of mention or ping
-    user_ref = USER_ALIASES.get(user_id, username)
+    user_ref = get_alias(guild_id, user_id) or username
     
     expire_msg = (
         f"⌛ A {type_name.lower()} entry for {user_ref} has expired!\n"
@@ -1418,20 +1444,20 @@ async def check_shame_credit_expiry():
             if not expired_entries:
                 continue
 
-            guild_data = get_guild_data(guild.id)
+            guild_entries = get_guild_entries(guild.id)
             entries_removed = False
 
             # Remove ALL expired entries before doing any Discord API awaits.
             for entry_info in expired_entries:
                 entry_id_str = str(entry_info["id"])
 
-                if entry_id_str in guild_data["entries"]:
-                    del guild_data["entries"][entry_id_str]
+                if entry_id_str in guild_entries:
+                    del guild_entries[entry_id_str]
                     entries_removed = True
 
             # Persist the new state before broadcasting anything.
             if entries_removed:
-                if not update_guild_data(guild.id, guild_data):
+                if not update_guild_entries(guild.id, guild_entries):
                     print(
                         f"❌ Failed to save expired-entry removals "
                         f"for {guild.name}; skipping expiry broadcast."
@@ -1877,12 +1903,10 @@ async def user_alias_autocomplete(
     """Autocomplete for user selection - returns aliases"""
     choices = []
     current_lower = current.lower()
-    
-    for user_id, alias in USER_ALIASES.items():
+    guild_aliases = get_guild_aliases(interaction.guild_id)
+    for user_id_str, alias in guild_aliases.items():
         if current_lower in alias.lower():
-            choices.append(app_commands.Choice(name=alias, value=str(user_id)))
-    
-    # Limit to 25 choices (Discord's limit)
+            choices.append(app_commands.Choice(name=alias, value=user_id_str))
     return choices[:25]
 
 async def alias_name_autocomplete(
@@ -1892,12 +1916,10 @@ async def alias_name_autocomplete(
     """Autocomplete for alias names"""
     choices = []
     current_lower = current.lower()
-    
-    for user_id, alias in USER_ALIASES.items():
+    guild_aliases = get_guild_aliases(interaction.guild_id)
+    for user_id_str, alias in guild_aliases.items():
         if current_lower in alias.lower():
             choices.append(app_commands.Choice(name=alias, value=alias))
-    
-    # Limit to 25 choices (Discord's limit)
     return choices[:25]
 
 # ===== END AUTOCOMPLETE FUNCTIONS =====
@@ -1928,7 +1950,7 @@ async def create_entry(
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
         return
 
-    if interaction.user.id not in USER_ALIASES:
+    if not get_alias(interaction.guild_id, interaction.user.id):
         await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
         return
     
@@ -1941,13 +1963,14 @@ async def create_entry(
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
         return
 
-    # Parse user from autocomplete (it's now a string user_id)
+    # Parse user from autocomplete (it's a string user_id)
+    guild_aliases = get_guild_aliases(interaction.guild_id)
     try:
         user_id = int(user)
-        if user_id not in USER_ALIASES:
+        if str(user_id) not in guild_aliases:
             await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
             return
-        username = USER_ALIASES[user_id]
+        username = guild_aliases[str(user_id)]
     except ValueError:
         await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
         return
@@ -1989,7 +2012,8 @@ async def create_entry(
     guild_data = get_guild_data(interaction.guild_id)
     
     # Save data and check if disk is full
-    guild_data["entries"][str(entry_id)] = {
+    guild_entries = get_guild_entries(interaction.guild_id)
+    guild_entries[str(entry_id)] = {
         "user_id": user_id,
         "username": username,
         "type": entry_type,
@@ -1998,7 +2022,8 @@ async def create_entry(
         "created_by": interaction.user.id
     }
     
-    if not update_guild_data(interaction.guild_id, guild_data): # Or check save_shame_data directly
+    # Save both guild data and halls data
+    if not update_guild_data(interaction.guild_id, guild_data) or not update_guild_entries(interaction.guild_id, guild_entries):
         await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=False)
         return
 
@@ -2029,7 +2054,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
         return
 
-    if interaction.user.id not in USER_ALIASES:
+    if not get_alias(interaction.guild_id, interaction.user.id):
         await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
         return
     
@@ -2047,16 +2072,17 @@ async def delete_entry(interaction: discord.Interaction, id: int):
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
+    guild_entries = get_guild_entries(interaction.guild_id)
     entry_id_str = str(id)
-    if entry_id_str not in guild_data["entries"]:
+    if entry_id_str not in guild_entries:
         await interaction.response.send_message("❌ Entry ID not found.", ephemeral=False)
         return
 
-    entry = guild_data["entries"][entry_id_str]
-    del guild_data["entries"][entry_id_str]
+    entry = guild_entries[entry_id_str]
+    del guild_entries[entry_id_str]
     
     # Check if save operation succeeds
-    if not update_guild_data(interaction.guild_id, guild_data):
+    if not update_guild_entries(interaction.guild_id, guild_entries):
         await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=False)
         return
     
@@ -2106,7 +2132,7 @@ async def change_entry(
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
         return
 
-    if interaction.user.id not in USER_ALIASES:
+    if not get_alias(interaction.guild_id, interaction.user.id):
         await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
         return
     
@@ -2125,15 +2151,16 @@ async def change_entry(
         return
 
     # Parse user from autocomplete if provided
+    guild_aliases = get_guild_aliases(interaction.guild_id)
     user_id = None
     username = None
     if user:
         try:
             user_id = int(user)
-            if user_id not in USER_ALIASES:
+            if str(user_id) not in guild_aliases:
                 await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
                 return
-            username = USER_ALIASES[user_id]
+            username = guild_aliases[str(user_id)]
         except ValueError:
             await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
             return
@@ -2143,12 +2170,13 @@ async def change_entry(
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
+    guild_entries = get_guild_entries(interaction.guild_id)
     entry_id_str = str(id)
-    if entry_id_str not in guild_data["entries"]:
+    if entry_id_str not in guild_entries:
         await interaction.response.send_message("❌ Entry ID not found.", ephemeral=False)
         return
 
-    old_entry = dict(guild_data["entries"][entry_id_str])
+    old_entry = dict(guild_entries[entry_id_str])
     new_entry = dict(old_entry)
     
     # Apply changes
@@ -2190,10 +2218,10 @@ async def change_entry(
             return
         new_entry["date"] = adjusted_date.isoformat()
     
-    guild_data["entries"][entry_id_str] = new_entry
+    guild_entries[entry_id_str] = new_entry
     
     # Check if save operation succeeds
-    if not update_guild_data(interaction.guild_id, guild_data):
+    if not update_guild_entries(interaction.guild_id, guild_entries):
         await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=False)
         return
     
@@ -2243,18 +2271,19 @@ async def create_alias(interaction: discord.Interaction, user: discord.Member, a
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
     # Check if user already has an alias
-    if user.id in USER_ALIASES:
+    guild_aliases = get_guild_aliases(interaction.guild_id)
+    if str(user.id) in guild_aliases:
         await interaction.response.send_message(
-            f"❌ User `{user.name}` already has an alias: `{USER_ALIASES[user.id]}`. Use `/change_alias` to modify it.",
+            f"❌ User `{user.name}` already has an alias: `{guild_aliases[str(user.id)]}`. Use `/change_alias` to modify it.",
             ephemeral=False
         )
         return
 
     # Check if alias is already in use
-    for uid, existing_alias in USER_ALIASES.items():
+    for uid_str, existing_alias in guild_aliases.items():
         if existing_alias.lower() == alias.lower():
-            existing_user = interaction.guild.get_member(uid)
-            user_ref = existing_user.name if existing_user else f"User ID {uid}"
+            existing_user = interaction.guild.get_member(int(uid_str))
+            user_ref = existing_user.name if existing_user else f"User ID {uid_str}"
             await interaction.response.send_message(
                 f"❌ The alias `{existing_alias}` is already assigned to `{user_ref}`.",
                 ephemeral=False
@@ -2262,7 +2291,8 @@ async def create_alias(interaction: discord.Interaction, user: discord.Member, a
             return
 
     # Create the alias
-    USER_ALIASES[user.id] = alias
+    guild_aliases[str(user.id)] = alias
+    all_aliases[str(interaction.guild_id)] = guild_aliases
     if not save_aliases():
         await interaction.response.send_message("❌ Failed to save alias. Please try again later.", ephemeral=False)
         return
@@ -2299,13 +2329,14 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
     # Find the user ID with this alias
-    user_id = None
-    for uid, existing_alias in USER_ALIASES.items():
+    guild_aliases = get_guild_aliases(interaction.guild_id)
+    user_id_str = None
+    for uid_str, existing_alias in guild_aliases.items():
         if existing_alias.lower() == alias.lower():
-            user_id = uid
+            user_id_str = uid_str
             break
 
-    if user_id is None:
+    if user_id_str is None:
         await interaction.response.send_message(
             f"❌ No user found with alias `{alias}`.",
             ephemeral=False
@@ -2313,10 +2344,10 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
         return
 
     # Check if new alias is already in use by someone else
-    for uid, existing_alias in USER_ALIASES.items():
-        if uid != user_id and existing_alias.lower() == new_alias.lower():
-            existing_user = interaction.guild.get_member(uid)
-            user_ref = existing_user.name if existing_user else f"User ID {uid}"
+    for uid_str, existing_alias in guild_aliases.items():
+        if uid_str != user_id_str and existing_alias.lower() == new_alias.lower():
+            existing_user = interaction.guild.get_member(int(uid_str))
+            user_ref = existing_user.name if existing_user else f"User ID {uid_str}"
             await interaction.response.send_message(
                 f"❌ The alias `{existing_alias}` is already assigned to `{user_ref}`.",
                 ephemeral=False
@@ -2324,16 +2355,18 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
             return
 
     # Change the alias
-    old_alias = USER_ALIASES[user_id]
-    USER_ALIASES[user_id] = new_alias
+    old_alias = guild_aliases[user_id_str]
+    guild_aliases[user_id_str] = new_alias
+    all_aliases[str(interaction.guild_id)] = guild_aliases
     if not save_aliases():
         # Revert on failure
-        USER_ALIASES[user_id] = old_alias
+        guild_aliases[user_id_str] = old_alias
+        all_aliases[str(interaction.guild_id)] = guild_aliases
         await interaction.response.send_message("❌ Failed to save alias. Please try again later.", ephemeral=False)
         return
 
-    user = interaction.guild.get_member(user_id)
-    user_ref = user.name if user else f"User ID {user_id}"
+    user = interaction.guild.get_member(int(user_id_str))
+    user_ref = user.name if user else f"User ID {user_id_str}"
     await interaction.response.send_message(
         f"✅ Changed alias for `{user_ref}`: `{old_alias}` → `{new_alias}`",
         ephemeral=False
@@ -2363,13 +2396,14 @@ async def delete_alias(interaction: discord.Interaction, alias: str):
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
     # Find the user ID with this alias
-    user_id = None
-    for uid, existing_alias in USER_ALIASES.items():
+    guild_aliases = get_guild_aliases(interaction.guild_id)
+    user_id_str = None
+    for uid_str, existing_alias in guild_aliases.items():
         if existing_alias.lower() == alias.lower():
-            user_id = uid
+            user_id_str = uid_str
             break
 
-    if user_id is None:
+    if user_id_str is None:
         await interaction.response.send_message(
             f"❌ No user found with alias `{alias}`.",
             ephemeral=False
@@ -2377,16 +2411,18 @@ async def delete_alias(interaction: discord.Interaction, alias: str):
         return
 
     # Delete the alias
-    deleted_alias = USER_ALIASES[user_id]
-    del USER_ALIASES[user_id]
+    deleted_alias = guild_aliases[user_id_str]
+    del guild_aliases[user_id_str]
+    all_aliases[str(interaction.guild_id)] = guild_aliases
     if not save_aliases():
         # Revert on failure
-        USER_ALIASES[user_id] = deleted_alias
+        guild_aliases[user_id_str] = deleted_alias
+        all_aliases[str(interaction.guild_id)] = guild_aliases
         await interaction.response.send_message("❌ Failed to delete alias. Please try again later.", ephemeral=False)
         return
 
-    user = interaction.guild.get_member(user_id)
-    user_ref = user.name if user else f"User ID {user_id}"
+    user = interaction.guild.get_member(int(user_id_str))
+    user_ref = user.name if user else f"User ID {user_id_str}"
     await interaction.response.send_message(
         f"✅ Deleted alias `{deleted_alias}` for `{user_ref}`",
         ephemeral=False
@@ -2409,18 +2445,19 @@ async def list_aliases(interaction: discord.Interaction):
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    if not USER_ALIASES:
+    guild_aliases = get_guild_aliases(interaction.guild_id)
+    if not guild_aliases:
         await interaction.response.send_message("📋 No aliases configured.", ephemeral=False)
         return
 
     # Build list of aliases sorted by alias name
     alias_list = []
-    for user_id, alias in sorted(USER_ALIASES.items(), key=lambda x: x[1].lower()):
-        user = interaction.guild.get_member(user_id)
+    for uid_str, alias in sorted(guild_aliases.items(), key=lambda x: x[1].lower()):
+        user = interaction.guild.get_member(int(uid_str))
         if user:
             alias_list.append(f"• `{alias}` → {user.mention} (`{user.name}`)")
         else:
-            alias_list.append(f"• `{alias}` → User ID `{user_id}` (not in server)")
+            alias_list.append(f"• `{alias}` → User ID `{uid_str}` (not in server)")
 
     # Split into chunks if too long (Discord has 2000 char limit)
     response = "📋 **User Aliases**\n\n" + "\n".join(alias_list)
