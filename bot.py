@@ -8,11 +8,15 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
 import re
-import sys
+import google.generativeai as genai
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # Bot setup
 intents = discord.Intents.default()
@@ -23,7 +27,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.0.0"
+BOT_VERSION = "2.1.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1871,22 +1875,30 @@ async def info(interaction: discord.Interaction):
     act_win = guild_data.get("activity_window_days", 7)
     act_thresh = guild_data.get("activity_message_threshold", 1)
 
+    # Calculate Entry Statistics
+    guild_entries = get_guild_entries(interaction.guild_id)
+    total_entries_count = len(guild_entries)
+    shame_entries_count = sum(1 for e in guild_entries.values() if e.get("type", "shame") == "shame")
+    credit_entries_count = sum(1 for e in guild_entries.values() if e.get("type") == "credit")
+
     response_text = (
         "**General Stuff**\n"
         f"Version: {BOT_VERSION}\n"
         f"Command Cooldown: {cooldown_seconds}s\n"
         f"Disabled Commands: {disabled_cmds}\n"
         f"Manager Role: {manager_role_text}\n\n"
-        "**Shame Stuff**\n"
-        f"Shame Entry Expiry Timer: {expiry_timer}\n"
-        f"Shame Broadcast Channel: {shame_channel}\n\n"
+        "**Hall Stuff**\n"
+        f"Hall Channel: {shame_channel}\n"
+        f"Total # of Entries: {total_entries_count}\n"
+        f"# of Shame Entries: {shame_entries_count}\n"
+        f"# of Credit Entries: {credit_entries_count}\n\n"
         "**Vote to Kick Stuff**\n"
         f"Vote to Kick Ban Duration: {votekick_ban_duration}\n"
         f"Vote to Kick Broadcast Channel: {vk_bc}\n"
-        f"Active Members (Last {act_win} Days): {active_members}\n"
-        f"Required Votes: {critical_amount}\n\n"
+        f"Critical Amount: {critical_amount}\n\n"
         "**Activity Stuff**\n"
         f"Active Member Role: {am_role_text}\n"
+        f"Active Members: {active_members}\n"
         f"Activity Requirement Window: {act_win} Days\n"
         f"Activity Requirement Threshold: {act_thresh} Messages\n"
         f"Activity Broadcast Channel: {act_bc}"
@@ -1928,43 +1940,36 @@ async def alias_name_autocomplete(
 async def changelog(interaction: discord.Interaction):
     changelog_text = (
         "📋 **Suite Bot Changelog**\n\n"
+        "**v2.1.0**\n"
+        "• Added `/summarize` command to summarize recent chats\n\n"
         "**v2.0.0**\n"
         "• Per-server aliases (aliases are no longer global)\n"
-        "• Renamed `shame_data.json` → `main.json`\n"
-        "• Extracted hall entries to `halls.json`\n"
-        "• Renamed `vote_data.json` → `votes.json`\n"
-        "• Removed all legacy/backward-compatibility code\n"
-        "• Added `/changelog` command\n\n"
-        "**v1.11.3**\n"
-        "• All command responses made non-ephemeral except `/vote` and `/unvote`\n\n"
-        "**v1.11.2**\n"
-        "• Fixed alias escaping (e.g. `Pi><el` no longer shows as `Pi\\><el`)\n"
-        "• Fixed broadcast dates showing UTC instead of Pacific time\n"
-        "• `/change_alias` responses are now non-ephemeral\n"
-        "• Renamed `/set_shame_channel` → `/set_hall_channel`\n"
-        "• Renamed `/reset_shame_channel` → `/reset_hall_channel`\n\n"
-        "**v1.11.1**\n"
-        "• Bug fixes\n\n"
+        "• Added `/changelog` command\n"
+        "• Removed all legacy/backward-compatibility code\n\n"
         "**v1.11.0**\n"
-        "• Added alias management commands (`/create_alias`, `/change_alias`, `/delete_alias`, `/list_aliases`)\n"
-        "• Fixed timezone bugs\n\n"
+        "• Added alias commands: create, delete, change aliases\n\n"
         "**v1.10.0**\n"
-        "• Persistent numeric entry IDs added to hall display\n\n"
-        "**v1.9.x**\n"
-        "• Hall of Credit added alongside Hall of Shame\n"
-        "• Past-date entry support\n"
-        "• External user (non-member) support\n"
-        "• Hall display split into shame/credit sections\n"
-        "• 2000-char message splitting for long halls\n\n"
-        "**v1.3.x–v1.8.x**\n"
-        "• Votekick system (community-driven kicks/bans with configurable duration)\n"
-        "• Active member role automation\n"
-        "• Privilege escalation security fix\n"
-        "• Logs moved to owner DMs\n"
-        "• Ragebait message marking (later removed)\n\n"
-        "**v1.0–v1.2**\n"
-        "• Initial release: Hall of Shame for tracking infractions/funny moments\n"
-        "• Basic entry management and expiry"
+        "• Made it so IDs show next to hall entries\n"
+        "• This made it easier to change or delete entries\n\n"
+        "**v1.9.0**\n"
+        "• Major hall overhaul (get it 🤣)\n"
+        "• Hall of Credit added (only hall of shame existed before)\n"
+        "• Locked down expiry durations (no longer configurable)\n"
+        "• Major hall formatting improvements\n\n"
+        "**v1.8.2**\n"
+        "• Added vote cooldowns with humorous error message\n\n"
+        "**v1.7.0**\n"
+        "• Added automatic wordle role management system\n\n"
+        "**v1.6.0**\n"
+        "• Updated activity system to permit message thresholds\n\n"
+        "**v1.3.1**\n"
+        "• Added `/votedata` command so you could see the current votes cast\n\n"
+        "**v1.1.0**\n"
+        "• Added ability to set an explicit vote to kick broadcast channel\n\n"
+        "**v1.0.0**\n"
+        "• Initial release of Shite\n"
+        "• Basic hall of shame system with `/shame` and `/unshame` commands\n"
+        "• Basic mark message as ragebait system"
     )
     await interaction.response.send_message(changelog_text)
 
@@ -2702,12 +2707,12 @@ async def unvote(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def votedata(interaction: discord.Interaction):
     if is_command_disabled(interaction.guild_id, "votedata"):
-        await interaction.response.send_message("❌ This command is disabled.", ephemeral=False)
+        await interaction.response.send_message("❌ This command is disabled.", ephemeral=True)
         return
 
     guild_vote_data = get_vote_data(interaction.guild_id)
     if not guild_vote_data:
-        await interaction.response.send_message("🕊️ There are currently no active kick votes in this server.")
+        await interaction.response.send_message("🕊️ There are currently no active kick votes in this server.", ephemeral=True)
         return
 
     critical_amount = get_critical_amount(interaction.guild_id)
@@ -2743,7 +2748,71 @@ async def votedata(interaction: discord.Interaction):
             
         lines.append(f"• **{name}**: {len(voters_dict)} vote(s){voters_string}")
         
-    await interaction.response.send_message("\n".join(lines))
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+@bot.tree.command(name="summarize", description="Summarize recent chat history using Gemini AI.")
+@app_commands.choices(timeframe=[
+    app_commands.Choice(name="Last hour (max 100 msgs)", value="1_100"),
+    app_commands.Choice(name="Last 3 hours (max 300 msgs)", value="3_300"),
+    app_commands.Choice(name="Last 6 hours (max 500 msgs)", value="6_500"),
+    app_commands.Choice(name="Last 24 hours (max 500 msgs)", value="24_500")
+])
+@app_commands.guild_only()
+async def summarize(interaction: discord.Interaction, timeframe: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True)
+    
+    if not GEMINI_API_KEY:
+        await interaction.followup.send("❌ Gemini AI is not configured. Missing API key.")
+        return
+
+    # Parse parameters
+    hours, limit = map(int, timeframe.value.split("_"))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    
+    messages_to_process = []
+    
+    try:
+        # Scan messages backwards (newest to oldest)
+        async for msg in interaction.channel.history(after=cutoff, limit=limit):
+            # Skip bots and webhooks
+            if msg.author.bot or msg.webhook_id:
+                continue
+            
+            # Format: DisplayName (UserID): MessageContent
+            author_name = msg.author.display_name
+            messages_to_process.append(f"{author_name} ({msg.author.id}): {msg.clean_content}")
+            
+    except discord.Forbidden:
+        await interaction.followup.send("❌ I lack permissions to read message history in this channel.")
+        return
+
+    if not messages_to_process:
+        await interaction.followup.send("No human messages found in that timeframe.")
+        return
+
+    # Reverse to restore chronological order
+    messages_to_process.reverse()
+    
+    try:
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        prompt = (
+            "You are a helpful assistant. Summarize the following Discord chat history. "
+            "Keep it concise, highlight the main topics discussed, and clearly attribute "
+            "notable points or context to the specific users involved (using their names).\n\n" 
+            + "\n".join(messages_to_process)
+        )
+        
+        response = model.generate_content(prompt)
+        
+        # If response exceeds 2000 chars, it'll error, so we truncate just in case.
+        summary_text = response.text
+        if len(summary_text) > 2000:
+            summary_text = summary_text[:1996] + "..."
+            
+        await interaction.followup.send(summary_text)
+        
+    except Exception as e:
+        await interaction.followup.send(f"❌ Gemini AI API Error: `{str(e)}`")
 
 @bot.tree.command(name="cooldown", description="Sets the command cooldown.")
 @app_commands.guild_only()
