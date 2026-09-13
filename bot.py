@@ -27,7 +27,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.1.0"
+BOT_VERSION = "2.1.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1890,8 +1890,8 @@ async def info(interaction: discord.Interaction):
         "**Hall Stuff**\n"
         f"Hall Channel: {shame_channel}\n"
         f"Total # of Entries: {total_entries_count}\n"
-        f"# of Shame Entries: {shame_entries_count}\n"
-        f"# of Credit Entries: {credit_entries_count}\n\n"
+        f"\# of Shame Entries: {shame_entries_count}\n"
+        f"\# of Credit Entries: {credit_entries_count}\n\n"
         "**Vote to Kick Stuff**\n"
         f"Vote to Kick Ban Duration: {votekick_ban_duration}\n"
         f"Vote to Kick Broadcast Channel: {vk_bc}\n"
