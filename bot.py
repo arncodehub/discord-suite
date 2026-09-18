@@ -27,7 +27,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.1.1"
+BOT_VERSION = "2.1.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -257,16 +257,25 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             pass
         return
 
-    tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
-    tb_text = "".join(tb_lines)
-    
-    log_payload = (
-        f"⚠️ **Application Command Error Intercepted!**\n"
-        f"**Command:** `/{interaction.command.name if interaction.command else 'Unknown'}`\n"
-        f"**User:** {interaction.user} (`{interaction.user.id}`)\n"
-        f"**Guild:** {interaction.guild.name if interaction.guild else 'DMs'} (`{interaction.guild_id}`)\n"
-        f"```python\n{tb_text}\n```"
-    )
+    # Check for Cloudflare 1015/429 ban
+    is_cloudflare_ban = False
+    if isinstance(error, app_commands.CommandInvokeError) and isinstance(error.original, discord.HTTPException):
+        if error.original.status == 429 and "Cloudflare" in str(error.original.text):
+            is_cloudflare_ban = True
+
+    if is_cloudflare_ban:
+        log_payload = "Temporary Wispbyte Cloudflare Ban in Effect"
+    else:
+        tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
+        tb_text = "".join(tb_lines)
+        
+        log_payload = (
+            f"⚠️ **Application Command Error Intercepted!**\n"
+            f"**Command:** `/{interaction.command.name if interaction.command else 'Unknown'}`\n"
+            f"**User:** {interaction.user} (`{interaction.user.id}`)\n"
+            f"**Guild:** {interaction.guild.name if interaction.guild else 'DMs'} (`{interaction.guild_id}`)\n"
+            f"```python\n{tb_text[:1500]}\n```" # Truncated slightly to ensure it doesn't break limits
+        )
     
     await broadcast_error_log(log_payload)
     
@@ -278,8 +287,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(error_msg, ephemeral=False)
     except Exception:
         pass
-
-# Removed duplicate interaction_check - consolidated into global_interaction_check below
 
 async def run_discord_channel_backup():
     """Backup data files straight to the developer's DM if 24 hours have passed."""
@@ -1995,33 +2002,35 @@ async def create_entry(
     reason: str,
     date: str = None
 ):
+    # Defer the interaction immediately to prevent the 3-second timeout
+    await interaction.response.defer(ephemeral=False)
+
     if is_command_disabled(interaction.guild_id, "create_entry"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.followup.send("❌ This command is disabled in this server.")
         return
 
     if not get_alias(interaction.guild_id, interaction.user.id):
-        await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
+        await interaction.followup.send("❌ You are not authorized to use this command. Only aliased users can manage entries.")
         return
     
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
+        await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.followup.send("❌ You don't have permission to use this command.")
         return
 
-    # Parse user from autocomplete (it's a string user_id)
     guild_aliases = get_guild_aliases(interaction.guild_id)
     try:
         user_id = int(user)
         if str(user_id) not in guild_aliases:
-            await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
+            await interaction.followup.send("❌ Invalid user selection.")
             return
         username = guild_aliases[str(user_id)]
     except ValueError:
-        await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
+        await interaction.followup.send("❌ Invalid user selection.")
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2029,38 +2038,27 @@ async def create_entry(
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
 
-    # Parse date - use the date picker value or default to current time
     entry_type = type.value
     if date:
         try:
-            # Parse M/D/YY format and set to 12 PM Pacific, converted to UTC
             entry_date = parse_flexible_date(date)
-            
-            # entry_date is now UTC timezone-naive
-            # We store this directly
             entry_date_utc = entry_date
             
-            # Validate that the entry hasn't already expired
             is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_utc, entry_type)
             if not is_valid:
-                await interaction.response.send_message(error_msg, ephemeral=False)
+                await interaction.followup.send(error_msg)
                 return
             
             entry_date_str = adjusted_date.isoformat()
         except (ValueError, AttributeError) as e:
-            await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=False)
+            await interaction.followup.send(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}")
             return
     else:
-        # Default to current UTC time
         entry_date_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     
-    # Get next persistent ID (this updates guild_data internally)
     entry_id = get_next_entry_id(interaction.guild_id)
-    
-    # CRITICAL: Reload guild_data after get_next_entry_id updates it
     guild_data = get_guild_data(interaction.guild_id)
     
-    # Save data and check if disk is full
     guild_entries = get_guild_entries(interaction.guild_id)
     guild_entries[str(entry_id)] = {
         "user_id": user_id,
@@ -2071,12 +2069,10 @@ async def create_entry(
         "created_by": interaction.user.id
     }
     
-    # Save both guild data and halls data
     if not update_guild_data(interaction.guild_id, guild_data) or not update_guild_entries(interaction.guild_id, guild_entries):
-        await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=False)
+        await interaction.followup.send("Please try again later, there are currently technical issues!")
         return
 
-    # If save succeeded, proceed with broadcast and non-ephemeral response
     target_member = interaction.guild.get_member(user_id) if interaction.guild else None
     await broadcast_entry_create(interaction, entry_id, target_member, entry_type, reason, entry_date_str, username)
     
@@ -2092,28 +2088,28 @@ async def create_entry(
             except discord.Forbidden:
                 pass
     
-    # Successful response must NOT be ephemeral
-    await interaction.response.send_message(f"✅ Created entry #{entry_id}")
+    await interaction.followup.send(f"✅ Created entry #{entry_id}")
 
 @bot.tree.command(name="delete_entry", description="Delete a Hall of Shame/Credit entry by ID")
 @app_commands.describe(id="Entry ID to delete")
 @app_commands.guild_only()
 async def delete_entry(interaction: discord.Interaction, id: int):
+    await interaction.response.defer(ephemeral=False)
     if is_command_disabled(interaction.guild_id, "delete_entry"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.followup.send("❌ This command is disabled in this server.", ephemeral=False)
         return
 
     if not get_alias(interaction.guild_id, interaction.user.id):
-        await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
+        await interaction.followup.send("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
         return
     
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
+        await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.followup.send("❌ You don't have permission to use this command.", ephemeral=False)
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2124,7 +2120,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
     guild_entries = get_guild_entries(interaction.guild_id)
     entry_id_str = str(id)
     if entry_id_str not in guild_entries:
-        await interaction.response.send_message("❌ Entry ID not found.", ephemeral=False)
+        await interaction.followup.send("❌ Entry ID not found.", ephemeral=False)
         return
 
     entry = guild_entries[entry_id_str]
@@ -2132,7 +2128,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
     
     # Check if save operation succeeds
     if not update_guild_entries(interaction.guild_id, guild_entries):
-        await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=False)
+        await interaction.followup.send("Please try again later, there are currently technical issues!", ephemeral=False)
         return
     
     # Broadcast delete message
@@ -2151,7 +2147,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
             except discord.Forbidden:
                 pass
 
-    await interaction.response.send_message(f"✅ Deleted entry #{entry_id_str}", ephemeral=False)
+    await interaction.followup.send(f"✅ Deleted entry #{entry_id_str}", ephemeral=False)
 
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
@@ -2177,26 +2173,27 @@ async def change_entry(
     reason: str = None,
     date: str = None
 ):
+    await interaction.response.defer(ephemeral=False)
     if is_command_disabled(interaction.guild_id, "change_entry"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.followup.send("❌ This command is disabled in this server.", ephemeral=False)
         return
 
     if not get_alias(interaction.guild_id, interaction.user.id):
-        await interaction.response.send_message("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
+        await interaction.followup.send("❌ You are not authorized to use this command. Only aliased users can manage entries.", ephemeral=False)
         return
     
     # At least one change must be specified
     if not any([user, type, reason, date]):
-        await interaction.response.send_message("❌ You must specify at least one field to change (user, type, reason, or date).", ephemeral=False)
+        await interaction.followup.send("❌ You must specify at least one field to change (user, type, reason, or date).", ephemeral=False)
         return
         
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
+        await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
         return
 
     if not is_manager(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=False)
+        await interaction.followup.send("❌ You don't have permission to use this command.", ephemeral=False)
         return
 
     # Parse user from autocomplete if provided
@@ -2207,11 +2204,11 @@ async def change_entry(
         try:
             user_id = int(user)
             if str(user_id) not in guild_aliases:
-                await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
+                await interaction.followup.send("❌ Invalid user selection.", ephemeral=False)
                 return
             username = guild_aliases[str(user_id)]
         except ValueError:
-            await interaction.response.send_message("❌ Invalid user selection.", ephemeral=False)
+            await interaction.followup.send("❌ Invalid user selection.", ephemeral=False)
             return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2222,7 +2219,7 @@ async def change_entry(
     guild_entries = get_guild_entries(interaction.guild_id)
     entry_id_str = str(id)
     if entry_id_str not in guild_entries:
-        await interaction.response.send_message("❌ Entry ID not found.", ephemeral=False)
+        await interaction.followup.send("❌ Entry ID not found.", ephemeral=False)
         return
 
     old_entry = dict(guild_entries[entry_id_str])
@@ -2251,19 +2248,19 @@ async def change_entry(
             effective_type = new_entry.get("type", old_entry.get("type", "shame"))
             is_valid, adjusted_date, error_msg = validate_entry_date(entry_date_utc, effective_type)
             if not is_valid:
-                await interaction.response.send_message(error_msg, ephemeral=False)
+                await interaction.followup.send(error_msg, ephemeral=False)
                 return
             
             new_entry["date"] = adjusted_date.isoformat()
         except (ValueError, AttributeError) as e:
-            await interaction.response.send_message(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=False)
+            await interaction.followup.send(f"❌ Invalid date format. Please use M/D/YY format (e.g., 8/22/26): {e}", ephemeral=False)
             return
     elif type:
         existing_date = datetime.fromisoformat(old_entry.get("date", datetime.now().isoformat()))
         effective_type = type.value
         is_valid, adjusted_date, error_msg = validate_entry_date(existing_date, effective_type)
         if not is_valid:
-            await interaction.response.send_message(error_msg, ephemeral=False)
+            await interaction.followup.send(error_msg, ephemeral=False)
             return
         new_entry["date"] = adjusted_date.isoformat()
     
@@ -2271,7 +2268,7 @@ async def change_entry(
     
     # Check if save operation succeeds
     if not update_guild_entries(interaction.guild_id, guild_entries):
-        await interaction.response.send_message("Please try again later, there are currently technical issues!", ephemeral=False)
+        await interaction.followup.send("Please try again later, there are currently technical issues!", ephemeral=False)
         return
     
     # Broadcast edit message
@@ -2290,7 +2287,19 @@ async def change_entry(
             except discord.Forbidden:
                 pass
 
-    await interaction.response.send_message(f"✅ Updated entry #{entry_id_str}", ephemeral=False)
+    await interaction.followup.send(f"✅ Updated entry #{entry_id_str}", ephemeral=False)
+
+async def broadcast_alias_update(interaction: discord.Interaction, message: str):
+    """Helper to broadcast alias changes to the shame channel."""
+    guild_data = get_guild_data(interaction.guild_id)
+    shame_channel_id = guild_data.get("shame_channel")
+    if shame_channel_id:
+        channel = interaction.guild.get_channel(shame_channel_id)
+        if channel and channel.permissions_for(interaction.guild.me).send_messages:
+            try:
+                await channel.send(message)
+            except discord.Forbidden:
+                pass
 
 # ===== ALIAS MANAGEMENT COMMANDS =====
 
@@ -2350,6 +2359,7 @@ async def create_alias(interaction: discord.Interaction, user: discord.Member, a
         f"✅ Created alias for `{user.name}`: `{alias}`",
         ephemeral=False
     )
+    await broadcast_alias_update(interaction, f"alias created: `{user.name}` -> {alias}")
 
 @bot.tree.command(name="change_alias", description="Change an existing user alias")
 @app_commands.describe(
@@ -2420,6 +2430,7 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
         f"✅ Changed alias for `{user_ref}`: `{old_alias}` → `{new_alias}`",
         ephemeral=False
     )
+    await broadcast_alias_update(interaction, f"alias changed: `{user_ref}`: {old_alias} -> {new_alias}")
 
 @bot.tree.command(name="delete_alias", description="Delete a user alias")
 @app_commands.describe(alias="The alias name to delete (start typing to see options)")
@@ -2476,17 +2487,21 @@ async def delete_alias(interaction: discord.Interaction, alias: str):
         f"✅ Deleted alias `{deleted_alias}` for `{user_ref}`",
         ephemeral=False
     )
+    await broadcast_alias_update(interaction, f"alias deleted: `{user_ref}` (was {deleted_alias})")
 
 @bot.tree.command(name="list_aliases", description="List all user aliases")
 @app_commands.guild_only()
 async def list_aliases(interaction: discord.Interaction):
+    # Defer immediately to safely handle pagination logic without timing out
+    await interaction.response.defer(ephemeral=False)
+
     if is_command_disabled(interaction.guild_id, "list_aliases"):
-        await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=False)
+        await interaction.followup.send("❌ This command is disabled in this server.")
         return
 
     remaining = check_cooldown(interaction.guild_id, interaction.user.id)
     if remaining > 0:
-        await interaction.response.send_message(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
+        await interaction.followup.send(f"⏱️ You're on cooldown. Wait {remaining:.1f} more seconds.")
         return
 
     guild_data = get_guild_data(interaction.guild_id)
@@ -2496,33 +2511,27 @@ async def list_aliases(interaction: discord.Interaction):
 
     guild_aliases = get_guild_aliases(interaction.guild_id)
     if not guild_aliases:
-        await interaction.response.send_message("📋 No aliases configured.", ephemeral=False)
+        await interaction.followup.send("📋 No aliases configured.")
         return
 
-    # Build list of aliases sorted by alias name
+    # Build list of aliases sorted by alias name (Removed mention to prevent pinging)
     alias_list = []
     for uid_str, alias in sorted(guild_aliases.items(), key=lambda x: x[1].lower()):
         user = interaction.guild.get_member(int(uid_str))
         if user:
-            alias_list.append(f"• `{alias}` → {user.mention} (`{user.name}`)")
+            alias_list.append(f"• `{alias}` → `{user.name}`")
         else:
             alias_list.append(f"• `{alias}` → User ID `{uid_str}` (not in server)")
 
-    # Split into chunks if too long (Discord has 2000 char limit)
     response = "📋 **User Aliases**\n\n" + "\n".join(alias_list)
     
     if len(response) > 2000:
-        # Split into multiple messages
-        await interaction.response.send_message("📋 **User Aliases** (1/2)", ephemeral=False)
         chunks = [alias_list[i:i + 20] for i in range(0, len(alias_list), 20)]
         for i, chunk in enumerate(chunks):
             chunk_msg = "\n".join(chunk)
-            if i == 0:
-                await interaction.response.send_message(f"📋 **User Aliases** ({i+1}/{len(chunks)})\n\n{chunk_msg}", ephemeral=False)
-            else:
-                await interaction.followup.send(f"📋 **User Aliases** ({i+1}/{len(chunks)})\n\n{chunk_msg}", ephemeral=False)
+            await interaction.followup.send(f"📋 **User Aliases** ({i+1}/{len(chunks)})\n\n{chunk_msg}")
     else:
-        await interaction.response.send_message(response, ephemeral=False)
+        await interaction.followup.send(response)
 
 # ===== END ALIAS MANAGEMENT COMMANDS =====
 
