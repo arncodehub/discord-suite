@@ -27,7 +27,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.1.2"
+BOT_VERSION = "2.1.3"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -2359,7 +2359,7 @@ async def create_alias(interaction: discord.Interaction, user: discord.Member, a
         f"✅ Created alias for `{user.name}`: `{alias}`",
         ephemeral=False
     )
-    await broadcast_alias_update(interaction, f"alias created: `{user.name}` -> {alias}")
+    await broadcast_alias_update(interaction, f"`{interaction.user.name}` created an alias for `{user.name}`: {alias}")
 
 @bot.tree.command(name="change_alias", description="Change an existing user alias")
 @app_commands.describe(
@@ -2430,7 +2430,7 @@ async def change_alias(interaction: discord.Interaction, alias: str, new_alias: 
         f"✅ Changed alias for `{user_ref}`: `{old_alias}` → `{new_alias}`",
         ephemeral=False
     )
-    await broadcast_alias_update(interaction, f"alias changed: `{user_ref}`: {old_alias} -> {new_alias}")
+    await broadcast_alias_update(interaction, f"`{interaction.user.name}` changed the alias of `{user_ref}`: {old_alias} -> {new_alias}")
 
 @bot.tree.command(name="delete_alias", description="Delete a user alias")
 @app_commands.describe(alias="The alias name to delete (start typing to see options)")
@@ -2487,7 +2487,7 @@ async def delete_alias(interaction: discord.Interaction, alias: str):
         f"✅ Deleted alias `{deleted_alias}` for `{user_ref}`",
         ephemeral=False
     )
-    await broadcast_alias_update(interaction, f"alias deleted: `{user_ref}` (was {deleted_alias})")
+    await broadcast_alias_update(interaction, f"`{interaction.user.name}` deleted the alias of `{user_ref}`: {deleted_alias}")
 
 @bot.tree.command(name="list_aliases", description="List all user aliases")
 @app_commands.guild_only()
@@ -2521,7 +2521,7 @@ async def list_aliases(interaction: discord.Interaction):
         if user:
             alias_list.append(f"• `{alias}` → `{user.name}`")
         else:
-            alias_list.append(f"• `{alias}` → User ID `{uid_str}` (not in server)")
+            alias_list.append(f"• `{alias}` → <@{uid_str}> (ping as they are not in the server anyways)")
 
     response = "📋 **User Aliases**\n\n" + "\n".join(alias_list)
     
