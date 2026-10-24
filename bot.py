@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
 import re
-import google.genai as genai
+from google import genai
 
 # Load environment variables
 load_dotenv()
@@ -17,6 +17,8 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    client = None
 
 # Bot setup
 intents = discord.Intents.default()
@@ -2770,7 +2772,7 @@ async def votedata(interaction: discord.Interaction):
 async def summarize(interaction: discord.Interaction, timeframe: app_commands.Choice[str]):
     await interaction.response.defer(ephemeral=True)
     
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or not client:
         await interaction.followup.send("☠️ Gemini AI is not configured. Missing API key.")
         return
 
