@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
 import re
-from google import genai
+import google.genai as genai
 
 # Load environment variables
 load_dotenv()
