@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import traceback
 import re
-from google import genai
+import google.generativeai as genai
 
 # Load environment variables
 load_dotenv()
@@ -16,7 +16,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 if GEMINI_API_KEY:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # Bot setup
 intents = discord.Intents.default()
@@ -2803,14 +2803,15 @@ async def summarize(interaction: discord.Interaction, timeframe: app_commands.Ch
     messages_to_process.reverse()
     
     try:
-        response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
-            contents=f"""You are a helpful assistant. Summarize the following Discord chat history. 
-Keep it concise, highlight the main topics discussed, and clearly attribute 
-notable points or context to the specific users involved (using their names).
-
-{chr(10).join(messages_to_process)}"""
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        prompt = (
+            "You are a helpful assistant. Summarize the following Discord chat history. "
+            "Keep it concise, highlight the main topics discussed, and clearly attribute "
+            "notable points or context to the specific users involved (using their names).\n\n" 
+            + "\n".join(messages_to_process)
         )
+        
+        response = model.generate_content(prompt)
         
         # If response exceeds 2000 chars, it'll error, so we truncate just in case.
         summary_text = response.text
