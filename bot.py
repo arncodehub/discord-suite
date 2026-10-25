@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.2.1"
+BOT_VERSION = "2.2.3"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -121,6 +121,9 @@ last_unvote_time = {}
 
 # Track if initial message history sync has completed
 initial_sync_completed = False
+
+# Track if bot is fully ready (active users cache populated)
+bot_fully_ready = False
 
 # Wordle groups
 wordle_group = app_commands.Group(
@@ -1890,6 +1893,15 @@ async def on_ready():
     if not any(cmd.name == "wordle" for cmd in bot.tree.get_commands()):
         bot.tree.add_command(wordle_group)
 
+    # Wait 30 seconds for active users cache to populate, then mark bot as fully ready
+    async def set_bot_ready():
+        await asyncio.sleep(30)
+        global bot_fully_ready
+        bot_fully_ready = True
+        print("✅ Bot is fully ready - vote commands enabled")
+    
+    asyncio.create_task(set_bot_ready())
+
     try:
         # Add retry logic for command sync to handle rate limits
         max_sync_attempts = 3
@@ -2643,6 +2655,11 @@ async def list_aliases(interaction: discord.Interaction):
 async def vote(interaction: discord.Interaction, user: discord.Member, anonymous: bool = True):
     if is_command_disabled(interaction.guild_id, "votekick"):
         await interaction.response.send_message("❌ This command is disabled in this server.", ephemeral=True)
+        return
+        
+    # Check if bot is fully ready (active users cache populated)
+    if not bot_fully_ready:
+        await interaction.response.send_message("Hey, I just woke up, you may not vote yet, try again in 5 minutes or so.", ephemeral=True)
         return
         
     await interaction.response.defer(ephemeral=True)
