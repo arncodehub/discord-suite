@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.2.0"
+BOT_VERSION = "2.2.2"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -1808,6 +1808,56 @@ async def manage_active_roles_loop():
 async def discord_backup_loop():
     await run_discord_channel_backup()
 
+@tasks.loop(hours=24)
+async def daily_leaderboard_post():
+    """Posts leaderboards daily at 12pm Pacific time."""
+    try:
+        # Calculate next run time at 12pm Pacific
+        pacific_now = get_pacific_time()
+        target_hour = 12
+        
+        # If we're past noon, this will run at the next scheduled interval
+        # The @tasks.loop will handle scheduling, we just post when called
+        
+        for guild in bot.guilds:
+            await broadcast_leaderboard_to_channel(guild, guild.id)
+            
+    except Exception as e:
+        print(f"Error in daily_leaderboard_post: {e}")
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        await broadcast_error_log(f"💀 **Background Task Failure (`daily_leaderboard_post`):**\n```python\n{tb}\n```")
+
+@daily_leaderboard_post.before_loop
+async def before_daily_leaderboard_post():
+    """Wait until 12pm Pacific before starting the loop."""
+    await bot.wait_until_ready()
+    
+    # Calculate time until next 12pm Pacific
+    pacific_now = get_pacific_time()
+    target_hour = 12
+    
+    # Create target datetime for today at 12pm
+    target_time = pacific_now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+    
+    # If we're past 12pm today, target tomorrow's 12pm
+    if pacific_now >= target_time:
+        target_time = target_time + timedelta(days=1)
+    
+    # Convert to UTC for sleep calculation
+    if 3 <= target_time.month <= 11:
+        pacific_offset = timezone(timedelta(hours=-7))  # PDT
+    else:
+        pacific_offset = timezone(timedelta(hours=-8))  # PST
+    
+    target_time_utc = target_time.replace(tzinfo=pacific_offset).astimezone(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    
+    wait_seconds = (target_time_utc - now_utc).total_seconds()
+    
+    if wait_seconds > 0:
+        print(f"⏰ Waiting {wait_seconds/3600:.1f} hours until first daily leaderboard post at 12pm Pacific")
+        await asyncio.sleep(wait_seconds)
+
 @tasks.loop(minutes=30)
 async def wordle_autorole_loop():
     try:
@@ -1883,6 +1933,9 @@ async def on_ready():
         
     if not discord_backup_loop.is_running():
         discord_backup_loop.start()
+    
+    if not daily_leaderboard_post.is_running():
+        daily_leaderboard_post.start()
 
     if not wordle_autorole_loop.is_running():
         wordle_autorole_loop.start()
@@ -3023,6 +3076,34 @@ async def reset_leaderboard_channel(interaction: discord.Interaction):
     guild_data["leaderboard_channel"] = None
     update_guild_data(interaction.guild_id, guild_data)
     await interaction.response.send_message("🦴 Leaderboard channel reset.")
+
+@bot.tree.command(name="post_leaderboard", description="Manually post the current leaderboard")
+@app_commands.guild_only()
+async def post_leaderboard(interaction: discord.Interaction):
+    if is_command_disabled(interaction.guild_id, "post_leaderboard"):
+        await interaction.response.send_message("☠️ This command is disabled in this server.", ephemeral=False)
+        return
+    
+    remaining = check_cooldown(interaction.guild_id, interaction.user.id)
+    if remaining > 0:
+        await interaction.response.send_message(f"🌑 You're on cooldown. Wait {remaining:.1f} more seconds.", ephemeral=False)
+        return
+    
+    if not is_manager(interaction):
+        await interaction.response.send_message("☠️ Only Managers can use this.", ephemeral=False)
+        return
+    
+    guild_data = get_guild_data(interaction.guild_id)
+    cooldown_seconds = guild_data.get("cooldown", 0)
+    if cooldown_seconds > 0:
+        set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
+    
+    success = await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    
+    if success:
+        await interaction.response.send_message("🦴 Leaderboard posted!", ephemeral=False)
+    else:
+        await interaction.response.send_message("☠️ Failed to post leaderboard. Make sure a leaderboard channel is set.", ephemeral=False)
 
 # --- VOTEKICK CONFIG ---
 @bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
