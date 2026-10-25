@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.2.0"
+BOT_VERSION = "2.2.1"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -847,6 +847,7 @@ async def broadcast_hall_to_channel(channel: discord.TextChannel, messages: list
 def build_leaderboard_message(guild: discord.Guild, guild_id: int) -> str:
     """
     Builds a leaderboard message showing top users in each hall.
+    Only shows users tied for first place (highest count).
     Format: Date header, top shame losers, top credit winners.
     Uses aliases instead of usernames.
     """
@@ -868,10 +869,6 @@ def build_leaderboard_message(guild: discord.Guild, guild_id: int) -> str:
         else:  # credit
             credit_counts[user_id] = credit_counts.get(user_id, 0) + 1
     
-    # Sort by count (descending)
-    shame_sorted = sorted(shame_counts.items(), key=lambda x: x[1], reverse=True)
-    credit_sorted = sorted(credit_counts.items(), key=lambda x: x[1], reverse=True)
-    
     # Get current date in Pacific time
     pacific_now = get_pacific_time()
     month = pacific_now.month
@@ -881,19 +878,27 @@ def build_leaderboard_message(guild: discord.Guild, guild_id: int) -> str:
     # Build message
     message_lines = [f"**{date_str}: Halls Leaderboard**\n"]
     
-    # Hall of Shame section
-    if shame_sorted:
+    # Hall of Shame section - only show top count
+    if shame_counts:
+        max_shame_count = max(shame_counts.values())
+        top_shame_users = [(uid, count) for uid, count in shame_counts.items() if count == max_shame_count]
+        top_shame_users.sort(key=lambda x: x[0])  # Sort by user ID for consistency
+        
         message_lines.append("__Hall of Shame **LOSERS**__")
-        for user_id, count in shame_sorted:
+        for user_id, count in top_shame_users:
             alias = get_alias(guild_id, user_id) or f"User {user_id}"
             alias = escape_discord_formatting(alias)
             message_lines.append(f"📉 {alias} ({count})")
         message_lines.append("")  # Blank line
     
-    # Hall of Credit section
-    if credit_sorted:
+    # Hall of Credit section - only show top count
+    if credit_counts:
+        max_credit_count = max(credit_counts.values())
+        top_credit_users = [(uid, count) for uid, count in credit_counts.items() if count == max_credit_count]
+        top_credit_users.sort(key=lambda x: x[0])  # Sort by user ID for consistency
+        
         message_lines.append("__Hall of Credit Winners__")
-        for user_id, count in credit_sorted:
+        for user_id, count in top_credit_users:
             alias = get_alias(guild_id, user_id) or f"User {user_id}"
             alias = escape_discord_formatting(alias)
             message_lines.append(f"📈 {alias} ({count})")
