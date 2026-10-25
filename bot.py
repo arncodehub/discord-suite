@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.1.4"
+BOT_VERSION = "2.2.0"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -392,6 +392,7 @@ def get_guild_data(guild_id):
         data[guild_id_str] = {
             "manager_role": None,
             "shame_channel": None,
+            "leaderboard_channel": None,
             "cooldown": 0,
             "votekick_ban_duration": 7,
             "disabled_commands": [],
@@ -839,6 +840,81 @@ async def broadcast_hall_to_channel(channel: discord.TextChannel, messages: list
         for msg in messages:
             if msg:
                 await channel.send(msg)
+        return True
+    except discord.Forbidden:
+        return False
+
+def build_leaderboard_message(guild: discord.Guild, guild_id: int) -> str:
+    """
+    Builds a leaderboard message showing top users in each hall.
+    Format: Date header, top shame losers, top credit winners.
+    Uses aliases instead of usernames.
+    """
+    guild_entries = get_guild_entries(guild_id)
+    
+    if not guild_entries:
+        return "🕊️ Both halls are currently empty."
+    
+    # Separate entries by type and count per user
+    shame_counts = {}
+    credit_counts = {}
+    
+    for entry_id, entry in guild_entries.items():
+        entry_type = entry.get("type", "shame")
+        user_id = entry["user_id"]
+        
+        if entry_type == "shame":
+            shame_counts[user_id] = shame_counts.get(user_id, 0) + 1
+        else:  # credit
+            credit_counts[user_id] = credit_counts.get(user_id, 0) + 1
+    
+    # Sort by count (descending)
+    shame_sorted = sorted(shame_counts.items(), key=lambda x: x[1], reverse=True)
+    credit_sorted = sorted(credit_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # Get current date in Pacific time
+    pacific_now = get_pacific_time()
+    month = pacific_now.month
+    day = pacific_now.day
+    date_str = f"{month}/{day}"
+    
+    # Build message
+    message_lines = [f"**{date_str}: Halls Leaderboard**\n"]
+    
+    # Hall of Shame section
+    if shame_sorted:
+        message_lines.append("__Hall of Shame **LOSERS**__")
+        for user_id, count in shame_sorted:
+            alias = get_alias(guild_id, user_id) or f"User {user_id}"
+            alias = escape_discord_formatting(alias)
+            message_lines.append(f"🦇 {alias} ({count})")
+        message_lines.append("")  # Blank line
+    
+    # Hall of Credit section
+    if credit_sorted:
+        message_lines.append("__Hall of Credit Winners__")
+        for user_id, count in credit_sorted:
+            alias = get_alias(guild_id, user_id) or f"User {user_id}"
+            alias = escape_discord_formatting(alias)
+            message_lines.append(f"🎃 {alias} ({count})")
+    
+    return "\n".join(message_lines)
+
+async def broadcast_leaderboard_to_channel(guild: discord.Guild, guild_id: int):
+    """Broadcasts leaderboard message to the designated leaderboard channel."""
+    guild_data = get_guild_data(guild_id)
+    leaderboard_channel_id = guild_data.get("leaderboard_channel")
+    
+    if not leaderboard_channel_id:
+        return False
+    
+    channel = guild.get_channel(leaderboard_channel_id)
+    if not channel or not channel.permissions_for(guild.me).send_messages:
+        return False
+    
+    try:
+        leaderboard_msg = build_leaderboard_message(guild, guild_id)
+        await channel.send(leaderboard_msg)
         return True
     except discord.Forbidden:
         return False
@@ -1514,6 +1590,10 @@ async def check_shame_credit_expiry():
                         )
                     except discord.Forbidden:
                         pass
+            
+            # Also update leaderboard if entries were removed
+            if entries_removed:
+                await broadcast_leaderboard_to_channel(guild, guild.id)
 
     except Exception as e:
         print(f"Error in check_shame_credit_expiry background loop: {e}")
@@ -1861,6 +1941,9 @@ async def info(interaction: discord.Interaction):
 
     shame_channel_id = guild_data.get("shame_channel")
     shame_channel = f"<#{shame_channel_id}>" if shame_channel_id else "Not Set"
+    
+    leaderboard_channel_id = guild_data.get("leaderboard_channel")
+    leaderboard_channel = f"<#{leaderboard_channel_id}>" if leaderboard_channel_id else "Not Set"
 
     vk_bc_id = guild_data.get("votekick_broadcast_channel")
     vk_bc = f"<#{vk_bc_id}>" if vk_bc_id else "Not Set"
@@ -1898,6 +1981,7 @@ async def info(interaction: discord.Interaction):
         f"Manager Role: {manager_role_text}\n\n"
         "**Hall Stuff**\n"
         f"Hall Channel: {shame_channel}\n"
+        f"Leaderboard Channel: {leaderboard_channel}\n"
         f"Total # of Entries: {total_entries_count}\n"
         f"\# of Shame Entries: {shame_entries_count}\n"
         f"\# of Credit Entries: {credit_entries_count}\n\n"
@@ -2090,6 +2174,9 @@ async def create_entry(
             except discord.Forbidden:
                 pass
     
+    # Also update leaderboard
+    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    
     await interaction.followup.send(f"🦴 Created entry #{entry_id}")
 
 @bot.tree.command(name="delete_entry", description="Delete a Hall of Shame/Credit entry by ID")
@@ -2150,6 +2237,9 @@ async def delete_entry(interaction: discord.Interaction, id: int):
                 pass
 
     await interaction.followup.send(f"🦴 Deleted entry #{entry_id_str}", ephemeral=False)
+    
+    # Also update leaderboard
+    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
 
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
@@ -2290,6 +2380,9 @@ async def change_entry(
                 pass
 
     await interaction.followup.send(f"🦴 Updated entry #{entry_id_str}", ephemeral=False)
+    
+    # Also update leaderboard
+    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
 
 async def broadcast_alias_update(interaction: discord.Interaction, message: str):
     """Helper to broadcast alias changes to the shame channel."""
@@ -2898,6 +2991,33 @@ async def reset_hall_channel(interaction: discord.Interaction):
     guild_data["shame_channel"] = None
     update_guild_data(interaction.guild_id, guild_data)
     await interaction.response.send_message("🦴 Hall broadcast channel reset.")
+
+@bot.tree.command(name="set_leaderboard_channel", description="Sets the leaderboard channel for Halls")
+@app_commands.describe(leaderboard_channel="The channel for leaderboard updates")
+@app_commands.guild_only()
+async def set_leaderboard_channel(interaction: discord.Interaction, leaderboard_channel: discord.TextChannel):
+    if not is_manager(interaction):
+        await interaction.response.send_message("☠️ Only Managers can use this.", ephemeral=False)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["leaderboard_channel"] = leaderboard_channel.id
+    update_guild_data(interaction.guild_id, guild_data)
+    
+    # Post initial leaderboard
+    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    
+    await interaction.response.send_message(f"🦴 Leaderboard channel set to {leaderboard_channel.mention}")
+
+@bot.tree.command(name="reset_leaderboard_channel", description="Resets the leaderboard channel")
+@app_commands.guild_only()
+async def reset_leaderboard_channel(interaction: discord.Interaction):
+    if not is_manager(interaction):
+        await interaction.response.send_message("☠️ Only Managers can use this.", ephemeral=False)
+        return
+    guild_data = get_guild_data(interaction.guild_id)
+    guild_data["leaderboard_channel"] = None
+    update_guild_data(interaction.guild_id, guild_data)
+    await interaction.response.send_message("🦴 Leaderboard channel reset.")
 
 # --- VOTEKICK CONFIG ---
 @bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
