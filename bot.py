@@ -187,7 +187,7 @@ async def retry_pending_dev_dm_logs():
 
             except Exception as e:
                 if is_transient_network_error(e):
-                    print(f"⏱️ Developer DM retry failed; will retry later: {e}")
+                    print(f"⏳ Developer DM retry failed; will retry later: {e}")
                     return
 
                 print(f"❌ Dropping developer DM after permanent failure: {e}")
@@ -195,7 +195,7 @@ async def retry_pending_dev_dm_logs():
 
     except Exception as e:
         if is_transient_network_error(e):
-            print(f"⏱️ Developer DM retry connection failed: {e}")
+            print(f"⏳ Developer DM retry connection failed: {e}")
         else:
             print(f"❌ Developer DM retry failed: {e}")
 
@@ -1096,7 +1096,7 @@ async def broadcast_entry_expire(guild: discord.Guild, guild_id: int, entry_id: 
     user_ref = get_alias(guild_id, user_id) or username
     
     expire_msg = (
-        f"⏳ A {type_name.lower()} entry for {user_ref} has expired!\n"
+        f"⌛ A {type_name.lower()} entry for {user_ref} has expired!\n"
         f"Reason: {reason}\n"
         f"Date: {formatted_date}\n"
         f"ID: {entry_id}"
@@ -1682,7 +1682,7 @@ async def synchronize_active_member_roles():
                     # A failed history scan means our desired-state calculation
                     # is incomplete. Abort before making ANY role changes.
                     print(
-                        f"⛔ Aborting Active Member synchronization for "
+                        f"🛑 Aborting Active Member synchronization for "
                         f"{guild.name}: failed to scan #{channel.name}: {e}"
                     )
                     return
@@ -1741,7 +1741,7 @@ async def synchronize_active_member_roles():
                         # Abort immediately. Do not continue issuing role
                         # requests after a failed role operation.
                         print(
-                            f"⛔ Aborting Active Member synchronization for "
+                            f"🛑 Aborting Active Member synchronization for "
                             f"{guild.name}: failed to add role to "
                             f"{member.name}: {e}"
                         )
@@ -1775,7 +1775,7 @@ async def synchronize_active_member_roles():
                         # Abort immediately. Do not continue issuing role
                         # requests after a failed role operation.
                         print(
-                            f"⛔ Aborting Active Member synchronization for "
+                            f"🛑 Aborting Active Member synchronization for "
                             f"{guild.name}: failed to remove role from "
                             f"{member.name}: {e}"
                         )
