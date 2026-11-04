@@ -1063,7 +1063,7 @@ async def broadcast_entry_edit(interaction: discord.Interaction, entry_id: int, 
     
     unchanged_str = ", ".join([k.replace("_", " ").title() for k in unchanged if k != "user_id"])
     
-    broadcast_msg = f"🔔 Changed entry #{entry_id} (Edited by: {action_taker})\n"
+    broadcast_msg = f"✏️ Changed entry #{entry_id} (Edited by: {action_taker})\n"
     broadcast_msg += "\n".join(changes)
     if unchanged_str:
         broadcast_msg += f"\nUnchanged: {unchanged_str}"
