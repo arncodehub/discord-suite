@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.2.4"
+BOT_VERSION = "2.2.5"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -3145,33 +3145,6 @@ async def post_leaderboard(interaction: discord.Interaction):
         await interaction.response.send_message("✅ Leaderboard posted!", ephemeral=False)
     else:
         await interaction.response.send_message("❌ Failed to post leaderboard. Make sure a leaderboard channel is set.", ephemeral=False)
-
-@bot.tree.command(name="set_leaderboard_channel", description="Sets the leaderboard channel for Halls")
-@app_commands.describe(leaderboard_channel="The channel for leaderboard updates")
-@app_commands.guild_only()
-async def set_leaderboard_channel(interaction: discord.Interaction, leaderboard_channel: discord.TextChannel):
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=False)
-        return
-    guild_data = get_guild_data(interaction.guild_id)
-    guild_data["leaderboard_channel"] = leaderboard_channel.id
-    update_guild_data(interaction.guild_id, guild_data)
-    
-    # Post initial leaderboard
-    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
-    
-    await interaction.response.send_message(f"✅ Leaderboard channel set to {leaderboard_channel.mention}")
-
-@bot.tree.command(name="reset_leaderboard_channel", description="Resets the leaderboard channel")
-@app_commands.guild_only()
-async def reset_leaderboard_channel(interaction: discord.Interaction):
-    if not is_manager(interaction):
-        await interaction.response.send_message("❌ Only Managers can use this.", ephemeral=False)
-        return
-    guild_data = get_guild_data(interaction.guild_id)
-    guild_data["leaderboard_channel"] = None
-    update_guild_data(interaction.guild_id, guild_data)
-    await interaction.response.send_message("✅ Leaderboard channel reset.")
 
 # --- VOTEKICK CONFIG ---
 @bot.tree.command(name="votekick_config_set", description="Sets votekick broadcast channel and ban duration.")
