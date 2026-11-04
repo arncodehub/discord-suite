@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.2.5"
+BOT_VERSION = "2.2.6"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -67,7 +67,7 @@ def load_aliases():
             with open(ALIASES_FILE, 'r') as f:
                 all_aliases = json.load(f)
         except (json.JSONDecodeError, PermissionError, ValueError) as e:
-            asyncio.create_task(broadcast_error_log(f"❌ **Corrupted `{ALIASES_FILE}` found!** Using defaults.\nError: `{e}`"))
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{ALIASES_FILE}` found!** Using defaults.\nError: `{e}`"))
             all_aliases = {}
     else:
         all_aliases = {}
@@ -83,7 +83,7 @@ def save_aliases():
     except Exception as e:
         print(f"Error saving aliases: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"📦 **Disk Save Blocked (`save_aliases`)** — Disk likely full!\n```python\n{tb}\n```"))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_aliases`)** — Disk likely full!\n```python\n{tb}\n```"))
         return False
 
 def get_guild_aliases(guild_id: int) -> dict:
@@ -187,7 +187,7 @@ async def retry_pending_dev_dm_logs():
 
             except Exception as e:
                 if is_transient_network_error(e):
-                    print(f"⏳ Developer DM retry failed; will retry later: {e}")
+                    print(f"⏱️ Developer DM retry failed; will retry later: {e}")
                     return
 
                 print(f"❌ Dropping developer DM after permanent failure: {e}")
@@ -195,7 +195,7 @@ async def retry_pending_dev_dm_logs():
 
     except Exception as e:
         if is_transient_network_error(e):
-            print(f"⏳ Developer DM retry connection failed: {e}")
+            print(f"⏱️ Developer DM retry connection failed: {e}")
         else:
             print(f"❌ Developer DM retry failed: {e}")
 
@@ -232,7 +232,7 @@ async def broadcast_error_log(message_content: str):
                 if is_transient_network_error(e):
                     pending_dev_dm_logs.extend(chunks[index:])
                     print(
-                        f"🔄 Developer DM queued for retry after transient "
+                        f"📥 Developer DM queued for retry after transient "
                         f"network error: {e}"
                     )
                 else:
@@ -242,7 +242,7 @@ async def broadcast_error_log(message_content: str):
     except Exception as e:
         if is_transient_network_error(e):
             pending_dev_dm_logs.extend(chunks)
-            print(f"🔄 Developer DM queued for retry: {e}")
+            print(f"📥 Developer DM queued for retry: {e}")
         else:
             print(f"❌ Failed to transmit developer DM: {e}")
 
@@ -307,7 +307,7 @@ async def run_discord_channel_backup():
         if last_backup_str:
             last_backup_time = datetime.fromisoformat(last_backup_str)
             if now < last_backup_time + timedelta(hours=24):
-                print("⏳ Discord Backup Skipped: Last archive was sent less than 24 hours ago.")
+                print("⏱️ Discord Backup Skipped: Last archive was sent less than 24 hours ago.")
                 return
 
         owner = bot.get_user(BOT_OWNER_ID) or await bot.fetch_user(BOT_OWNER_ID)
@@ -326,11 +326,11 @@ async def run_discord_channel_backup():
 
         date_stamp = now.strftime("%Y-%m-%d %H:%M:%S")
         await owner.send(
-            content=f"📦 **Automated 24-Hour Database Backup**\n🔔 Timestamp: `{date_stamp}`\n⚠️ *Keep these files safe for disaster recovery.*",
+            content=f"💾 **Automated 24-Hour Database Backup**\n🔔 Timestamp: `{date_stamp}`\n⚠️ *Keep these files safe for disaster recovery.*",
             files=files_to_send,
             silent=True
         )
-        print("📦 Success: Live JSON files dispatched to dev DM.")
+        print("💾 Success: Live JSON files dispatched to dev DM.")
 
         data["system_metadata"]["last_dev_dm_backup"] = now.isoformat()
         save_shame_data(data)
@@ -346,7 +346,7 @@ def load_shame_data():
             with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"❌ **Corrupted `{DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
             return {}
     return {}
 
@@ -360,7 +360,7 @@ def save_shame_data(data):
     except Exception as e:
         print(f"Error saving main data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"📦 **Disk Save Blocked (`save_shame_data`)** — Disk likely full!\n```python\n{tb}\n```"))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_shame_data`)** — Disk likely full!\n```python\n{tb}\n```"))
         return False
 
 def load_halls_data():
@@ -370,7 +370,7 @@ def load_halls_data():
             with open(HALLS_FILE, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"❌ **Corrupted `{HALLS_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{HALLS_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
             return {}
     return {}
 
@@ -385,7 +385,7 @@ def save_halls_data(data):
     except Exception as e:
         print(f"Error saving halls data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"📦 **Disk Save Blocked (`save_halls_data`)** — Disk likely full!\n```python\n{tb}\n```"))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_halls_data`)** — Disk likely full!\n```python\n{tb}\n```"))
         return False
 
 def get_guild_data(guild_id):
@@ -439,7 +439,7 @@ def load_vote_data():
                 vote_data = json.load(f)
                 return
         except (json.JSONDecodeError, PermissionError) as e:
-            asyncio.create_task(broadcast_error_log(f"❌ **Corrupted `{VOTE_DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
+            asyncio.create_task(broadcast_error_log(f"🚨 **Corrupted `{VOTE_DATA_FILE}` found!** Rebuilt as empty.\nError: `{e}`"))
     vote_data = {}
 
 def save_vote_data():
@@ -451,7 +451,7 @@ def save_vote_data():
     except Exception as e:
         print(f"Error saving vote data safely: {e}")
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        asyncio.create_task(broadcast_error_log(f"📦 **Disk Save Blocked (`save_vote_data`)** — Disk likely full!\n```python\n{tb}\n```"))
+        asyncio.create_task(broadcast_error_log(f"💾 **Disk Save Blocked (`save_vote_data`)** — Disk likely full!\n```python\n{tb}\n```"))
 
 def get_vote_data(guild_id):
     guild_id_str = str(guild_id)
@@ -1993,7 +1993,7 @@ async def on_ready():
         print(f"Failed to sync application tree parameters: {e}")
         await broadcast_error_log(f"⚠️ **Command Sync Failed**: {e}")
         
-    await broadcast_error_log("<:credit:1536076540889010188> **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
+    await broadcast_error_log("🟢 **Bot Startup Successful!** Systems initialized and historical scanner task dispatched.")
 
 @bot.tree.command(name="info", description="Display configuration settings and statistics parameters.")
 async def info(interaction: discord.Interaction):
