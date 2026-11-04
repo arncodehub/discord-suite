@@ -29,7 +29,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Bot version
-BOT_VERSION = "2.2.3"
+BOT_VERSION = "2.2.4"
 BOT_OWNER_ID = 807087691522375681  # Set this to your Discord ID for owner commands
 
 # Data storage files
@@ -908,13 +908,32 @@ def build_leaderboard_message(guild: discord.Guild, guild_id: int) -> str:
     
     return "\n".join(message_lines)
 
-async def broadcast_leaderboard_to_channel(guild: discord.Guild, guild_id: int):
-    """Broadcasts leaderboard message to the designated leaderboard channel."""
+async def broadcast_leaderboard_to_channel(guild: discord.Guild, guild_id: int, bypass_daily_limit: bool = False):
+    """
+    Broadcasts leaderboard message to the designated leaderboard channel.
+    
+    Args:
+        guild: The Discord guild
+        guild_id: The guild ID
+        bypass_daily_limit: If True, skips the once-per-day check (for manual posts)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
     guild_data = get_guild_data(guild_id)
     leaderboard_channel_id = guild_data.get("leaderboard_channel")
     
     if not leaderboard_channel_id:
         return False
+    
+    # Check if already posted today (unless bypassing)
+    if not bypass_daily_limit:
+        last_post_date = guild_data.get("last_leaderboard_post_date")
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        if last_post_date == today_str:
+            print(f"⏭️ Leaderboard already posted today for guild {guild.name}")
+            return False
     
     channel = guild.get_channel(leaderboard_channel_id)
     if not channel or not channel.permissions_for(guild.me).send_messages:
@@ -923,6 +942,11 @@ async def broadcast_leaderboard_to_channel(guild: discord.Guild, guild_id: int):
     try:
         leaderboard_msg = build_leaderboard_message(guild, guild_id)
         await channel.send(leaderboard_msg)
+        
+        # Update last post date
+        guild_data["last_leaderboard_post_date"] = datetime.now().strftime("%Y-%m-%d")
+        update_guild_data(guild_id, guild_data)
+        
         return True
     except discord.Forbidden:
         return False
@@ -1600,8 +1624,8 @@ async def check_shame_credit_expiry():
                         pass
             
             # Also update leaderboard if entries were removed
-            if entries_removed:
-                await broadcast_leaderboard_to_channel(guild, guild.id)
+            # if entries_removed:
+                # await broadcast_leaderboard_to_channel(guild, guild.id)
 
     except Exception as e:
         print(f"Error in check_shame_credit_expiry background loop: {e}")
@@ -1793,6 +1817,10 @@ async def synchronize_active_member_roles():
     
     # Mark initial sync as completed
     initial_sync_completed = True
+    global bot_fully_ready
+    if not bot_fully_ready:
+        bot_fully_ready = True
+        print("✅ Active users cache populated — vote commands enabled!")
 
 @bot.tree.interaction_check
 async def global_interaction_check(interaction: discord.Interaction) -> bool:
@@ -1813,13 +1841,13 @@ async def discord_backup_loop():
 
 @tasks.loop(hours=24)
 async def daily_leaderboard_post():
-    """Posts leaderboards daily at 12pm Pacific time."""
+    """Posts leaderboards daily at 1pm Pacific time."""
     try:
-        # Calculate next run time at 12pm Pacific
+        # Calculate next run time at 1pm Pacific
         pacific_now = get_pacific_time()
-        target_hour = 12
+        target_hour = 13
         
-        # If we're past noon, this will run at the next scheduled interval
+        # If we're past 1pm, this will run at the next scheduled interval
         # The @tasks.loop will handle scheduling, we just post when called
         
         for guild in bot.guilds:
@@ -1832,17 +1860,17 @@ async def daily_leaderboard_post():
 
 @daily_leaderboard_post.before_loop
 async def before_daily_leaderboard_post():
-    """Wait until 12pm Pacific before starting the loop."""
+    """Wait until 1pm Pacific before starting the loop."""
     await bot.wait_until_ready()
     
-    # Calculate time until next 12pm Pacific
+    # Calculate time until next 1pm Pacific
     pacific_now = get_pacific_time()
-    target_hour = 12
+    target_hour = 13
     
-    # Create target datetime for today at 12pm
+    # Create target datetime for today at 1pm
     target_time = pacific_now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
     
-    # If we're past 12pm today, target tomorrow's 12pm
+    # If we're past 1pm today, target tomorrow's 1pm
     if pacific_now >= target_time:
         target_time = target_time + timedelta(days=1)
     
@@ -1858,7 +1886,7 @@ async def before_daily_leaderboard_post():
     wait_seconds = (target_time_utc - now_utc).total_seconds()
     
     if wait_seconds > 0:
-        print(f"⏰ Waiting {wait_seconds/3600:.1f} hours until first daily leaderboard post at 12pm Pacific")
+        print(f"⏰ Waiting {wait_seconds/3600:.1f} hours until first daily leaderboard post at 1pm Pacific")
         await asyncio.sleep(wait_seconds)
 
 @tasks.loop(minutes=30)
@@ -1918,10 +1946,7 @@ async def on_ready():
     load_vote_data()
     load_aliases()
     
-    # Pre-calculate the critical amount for all connected servers on boot
-    for guild in bot.guilds:
-        refresh_critical_amount(guild.id)
-        
+    # Start background loops
     if not check_expired_votes.is_running():
         check_expired_votes.start()
 
@@ -1946,14 +1971,8 @@ async def on_ready():
     if not any(cmd.name == "wordle" for cmd in bot.tree.get_commands()):
         bot.tree.add_command(wordle_group)
 
-    # Wait 30 seconds for active users cache to populate, then mark bot as fully ready
-    async def set_bot_ready():
-        await asyncio.sleep(30)
-        global bot_fully_ready
-        bot_fully_ready = True
-        print("✅ Bot is fully ready - vote commands enabled")
-    
-    asyncio.create_task(set_bot_ready())
+    # Trigger the first sync immediately on boot in the background
+    asyncio.create_task(synchronize_active_member_roles())
 
     try:
         # Add retry logic for command sync to handle rate limits
@@ -2245,7 +2264,7 @@ async def create_entry(
                 pass
     
     # Also update leaderboard
-    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    # await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
     
     await interaction.followup.send(f"🦴 Created entry #{entry_id}")
 
@@ -2309,7 +2328,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
     await interaction.followup.send(f"🦴 Deleted entry #{entry_id_str}", ephemeral=False)
     
     # Also update leaderboard
-    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    # await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
 
 @bot.tree.command(name="change_entry", description="Edit a Hall of Shame/Credit entry")
 @app_commands.describe(
@@ -2452,7 +2471,7 @@ async def change_entry(
     await interaction.followup.send(f"🦴 Updated entry #{entry_id_str}", ephemeral=False)
     
     # Also update leaderboard
-    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    # await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
 
 async def broadcast_alias_update(interaction: discord.Interaction, message: str):
     """Helper to broadcast alias changes to the shame channel."""
@@ -2712,7 +2731,7 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
         
     # Check if bot is fully ready (active users cache populated)
     if not bot_fully_ready:
-        await interaction.response.send_message("Hey, I just woke up, you may not vote yet, try again in 5 minutes or so.", ephemeral=True)
+        await interaction.response.send_message("🎃 Sorry, I'm still half asleep, try voting again in 5 minutes or so.", ephemeral=True)
         return
         
     await interaction.response.defer(ephemeral=True)
@@ -2974,7 +2993,7 @@ async def summarize(interaction: discord.Interaction, timeframe: app_commands.Ch
     
     try:
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-3.5-flash-lite',
             contents='You are a helpful assistant. Summarize the following Discord chat history. '
                      'Keep it concise, highlight the main topics discussed, and clearly attribute '
                      'notable points or context to the specific users involved (using their names).\n\n'
@@ -3079,7 +3098,7 @@ async def set_leaderboard_channel(interaction: discord.Interaction, leaderboard_
     update_guild_data(interaction.guild_id, guild_data)
     
     # Post initial leaderboard
-    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id, bypass_daily_limit=True)
     
     await interaction.response.send_message(f"🦴 Leaderboard channel set to {leaderboard_channel.mention}")
 
@@ -3115,7 +3134,7 @@ async def post_leaderboard(interaction: discord.Interaction):
     if cooldown_seconds > 0:
         set_cooldown(interaction.guild_id, interaction.user.id, cooldown_seconds)
     
-    success = await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
+    success = await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id, bypass_daily_limit=True)
     
     if success:
         await interaction.response.send_message("🦴 Leaderboard posted!", ephemeral=False)
