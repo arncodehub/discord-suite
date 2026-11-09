@@ -1920,7 +1920,7 @@ async def create_entry(
     # Also update leaderboard
     # await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
     
-    await interaction.followup.send(f"{get_emoji('emoji_bot_startup_success')} Created entry #{entry_id}")
+    await interaction.followup.send(f"{get_emoji('emoji_normal_command_success')} Created entry #{entry_id}")
 
 @bot.tree.command(name="delete_entry", description="Delete a Hall of Shame/Credit entry by ID")
 @app_commands.describe(id="Entry ID to delete")
@@ -1979,7 +1979,7 @@ async def delete_entry(interaction: discord.Interaction, id: int):
             except discord.Forbidden:
                 pass
 
-    await interaction.followup.send(f"{get_emoji('emoji_entry_deleted')} Deleted entry #{entry_id_str}", ephemeral=False)
+    await interaction.followup.send(f"{get_emoji('emoji_normal_command_success')} Deleted entry #{entry_id_str}", ephemeral=False)
     
     # Also update leaderboard
     # await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
@@ -2122,7 +2122,7 @@ async def change_entry(
             except discord.Forbidden:
                 pass
 
-    await interaction.followup.send(f"{get_emoji('emoji_bot_startup_success')} Updated entry #{entry_id_str}", ephemeral=False)
+    await interaction.followup.send(f"{get_emoji('emoji_normal_command_success')} Changed entry #{entry_id_str}", ephemeral=False)
     
     # Also update leaderboard
     # await broadcast_leaderboard_to_channel(interaction.guild, interaction.guild_id)
@@ -2466,9 +2466,9 @@ async def vote(interaction: discord.Interaction, user: discord.Member, anonymous
     
     # Broadcast to the channel
     if anonymous:
-        await interaction.channel.send(f"{get_emoji('emoji_credit')} Someone voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
+        await interaction.channel.send(f"{get_emoji('emoji_vote_cast')} Someone voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
     else:
-        await interaction.channel.send(f"{get_emoji('emoji_credit')} `{interaction.user.name}` voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
+        await interaction.channel.send(f"{get_emoji('emoji_vote_cast')} `{interaction.user.name}` voted for `{user.name}` ({current_votes}/{critical_amount}).", silent=True)
 
     if current_votes >= critical_amount:
         del guild_vote_data[target_id_str]
